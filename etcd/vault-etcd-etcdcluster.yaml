@@ -1,0 +1,21 @@
+apiVersion: etcd.database.coreos.com/v1beta2
+kind: EtcdCluster
+metadata:
+  name: etcd-vault
+  namespace: etcd
+spec:
+  backup:
+    autoDelete: true
+    backupIntervalInSecond: 3600
+    maxBackups: 12
+    storageType: "PersistentVolume"
+    pv:
+      volumeSizeInMB: 2048
+  size: 1
+  TLS:
+    static:
+      member:
+        peerSecret: etcd-peer-tls
+        serverSecret: etcd-server-tls
+      operatorSecret: etcd-client-tls
+  version: "3.1.10"

@@ -1,0 +1,17 @@
+{
+	"CN": "*.etcd-vault.etcd.svc",
+	"hosts": [
+		"*.etcd-vault.etcd.svc"
+	],
+	"key": {
+		"algo": "rsa",
+		"size": 2048
+	},
+	"names": [{
+		"C": "DE",
+		"L": "Berlin",
+		"O": "travel audience GmbH",
+		"ST": "Berlin",
+		"OU": "devops"
+	}]
+}

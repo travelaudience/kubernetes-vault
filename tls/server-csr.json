@@ -1,0 +1,19 @@
+{
+	"CN": "*.etcd-vault.etcd.svc",
+	"hosts": [
+		"*.etcd-vault.etcd.svc",
+		"etcd-vault-client.etcd.svc",
+		"localhost"
+	],
+	"key": {
+		"algo": "rsa",
+		"size": 2048
+	},
+	"names": [{
+		"C": "DE",
+		"L": "Berlin",
+		"O": "travel audience GmbH",
+		"ST": "Berlin",
+		"OU": "devops"
+	}]
+}

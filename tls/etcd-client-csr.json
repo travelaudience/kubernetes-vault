@@ -1,0 +1,14 @@
+{
+	"CN": "etcd-client",
+	"key": {
+		"algo": "rsa",
+		"size": 2048
+	},
+	"names": [{
+		"C": "DE",
+		"L": "Berlin",
+		"O": "travel audience GmbH",
+		"ST": "Berlin",
+		"OU": "devops"
+	}]
+}
