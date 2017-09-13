@@ -6,11 +6,17 @@ Vault 0.8.2 on top of Kubernetes (backed by etcd 3.1.10).
 
 * [Pre-Requisites](#pre-requisites)
 * [Before proceeding](#before-proceeding)
+* [Creating the `etcd` and `vault` namespaces](#creating-the-etcd-and-vault-namespaces)
 * [Deploy `etcd`](#deploy-etcd)
   * [Deploy `etcd-operator`](#deploy-etcd-operator)
   * [Generate TLS certificates for `etcd`](#generate-tls-certificates-for-etcd)
   * [Create Kubernetes secrets for the TLS certificates](#create-kubernetes-secrets-for-the-tls-certificates)
   * [Bring up the `vault-etcd` cluster](#bring-up-the-vault-etcd-cluster)
+* [Deploy `vault`](#deploy-vault)
+  * [Create the `ConfigMap`](#create-the-configmap)
+  * [Create the `ServiceAccount`](#create-the-serviceaccount)
+  * [Create the `Deployment`](#create-the-deployment)
+  * [Initializing `vault`](#initializing-vault)
 
 ## Pre-Requisites
 
@@ -50,24 +56,28 @@ $ kubectl create clusterrolebinding \
   --user=${MY_GCLOUD_USER}
 ```
 
+## Creating the `etcd` and `vault` namespaces
+
+**TODO:** Add a clear and detailed explanation.
+
+```bash
+$ kubectl create namespace etcd
+namespace "etcd" created
+$ kubectl create namespace vault
+namespace "vault" created
+```
+
 ## Deploy `etcd`
 
 ### Deploy `etcd-operator`
 
 `etcd-operator` will be responsible for managing the etcd cluster that Vault
 will use as storage backend. It will handle tasks such as periodic backups and
-member recovery in disaster scenarios.
+member recovery in disaster scenarios. `etcd-operator` and the cluster itself
+will live in the `etcd` namespace.
 
-Both `etcd-operator` and the cluster itself will will live in the `etcd`
-namespace. One should thus start by creating this namespace:
-
-```bash
-$ kubectl create -f ./etcd-namespace.yaml
-namespace "etcd-operator" created
-```
-
-Then, and since RBAC is active on the cluster, one needs to setup adequate
-permissions. To do this one needs to
+To start with, and since RBAC is active on the cluster, one needs to setup
+adequate permissions. To do this one needs  to
 
 * Create a `ClusterRole` specifying a list of permissions;
 * Create a dedicated `ServiceAccount` for `etcd-operator`;
@@ -103,7 +113,7 @@ different from the final CA we want to establish, and that it serves a
 different purpose.
 
 ```bash
-$ ./tls/gen-certs.sh
+$ ./tls/create-etcd-certs.sh
 2017/09/12 18:33:09 [INFO] generating a new CA key and certificate from CSR
 (...)
 ```
@@ -114,7 +124,7 @@ $ ./tls/gen-certs.sh
 `etcd-operator` has strict requirements regarding the secrets used for TLS.
 
 ```bash
-$ ./tls/gen-secrets.sh
+$ ./tls/create-etcd-secrets.sh
 secret "etcd-peer-tls" created
 secret "etcd-server-tls" created
 secret "etcd-client-tls" created
@@ -128,4 +138,65 @@ created as a CR rather than a `Deployment` or `ReplicaSet`.
 ```bash
 $ kubectl create -f etcd/vault-etcd-etcdcluster.yaml
 etcdcluster "etcd-vault" created
+```
+
+## Deploy `vault`
+
+**TODO:** Add a clear and detailed explanation.
+
+### Create the `ConfigMap`
+
+```bash
+$ kubectl create -f vault/vault-configmap.yaml
+configmap "vault" created
+```
+
+### Create the `ServiceAccount`
+
+```bash
+$ kubectl create -f vault/vault-serviceaccount.yaml
+serviceaccount "vault" created
+```
+
+### Create the `Deployment`
+
+**TODO:** Warn about (and investigate) initial handshake errors.
+
+```bash
+$ kubectl create -f vault/vault-deployment.yaml
+deployment "vault" created
+```
+
+### Initializing `vault`
+
+(Terminal 1)
+
+```bash
+$ VAULT_POD_NAME=$(kubectl get --namespace vault pod \
+  | grep vault \
+  | awk '{print $1}')
+$ kubectl port-forward --namespace vault "${VAULT_POD_NAME}" 8200:8200
+Forwarding from 127.0.0.1:8200 -> 8200
+Forwarding from [::1]:8200 -> 8200
+```
+
+(Terminal 2)
+
+```bash
+$ export VAULT_ADDR='http://127.0.0.1:8200'
+$ vault init
+Unseal Key 1: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 3: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 4: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 5: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Initial Root Token: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+Vault initialized with 5 keys and a key threshold of 3. Please
+securely distribute the above keys. When the vault is re-sealed,
+restarted, or stopped, you must provide at least 3 of these keys
+to unseal it again.
+
+Vault does not store the master key. Without at least 3 keys,
+your vault will remain permanently sealed.
 ```

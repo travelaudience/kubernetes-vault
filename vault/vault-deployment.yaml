@@ -1,0 +1,52 @@
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: vault
+  name: vault
+  namespace: vault
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      containers:
+      - name: vault
+        image: "vault:0.8.2"
+        imagePullPolicy: Always
+        args:
+        - server
+        ports:
+        - containerPort: 8200
+          name: api
+        livenessProbe:
+          httpGet:
+            path: /v1/sys/health?&sealedcode=200&uninitcode=200
+            port: api
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /v1/sys/health?&sealedcode=200&uninitcode=200
+            port: api
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        securityContext:
+          capabilities:
+            add:
+            - IPC_LOCK
+        volumeMounts:
+        - mountPath: /vault/config
+          name: vault-config
+        - mountPath: /vault/tls
+          name: vault-etcd-tls
+      serviceAccountName: vault
+      volumes:
+      - configMap:
+          name: vault
+        name: vault-config
+      - secret:
+          secretName: vault-etcd-tls
+        name: vault-etcd-tls

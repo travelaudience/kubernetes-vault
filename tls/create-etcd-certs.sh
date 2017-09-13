@@ -42,8 +42,8 @@ function rename_certs {
     mv "${file}" "${file/.pem/.crt}"
   done
 
-  # We will need one CA per certificate, so we make three copies of it.
-  echo "etcd-client-ca.crt" "peer-ca.crt" "server-ca.crt" \
+  # We will need one CA per certificate, so we make four copies of it.
+  echo "etcd-client-ca.crt" "peer-ca.crt" "server-ca.crt" "vault-etcd-ca.crt" \
     | xargs -n 1 cp ca.crt
 }
 
@@ -57,6 +57,8 @@ gen_cert etcd-client && \
 gen_cert server && \
 # Generate the 'peer' certificate.
 gen_cert peer && \
+# Generate the 'vault-etcd' certificate.
+gen_cert vault-etcd && \
 # Rename generated certificates and keys.
 rename_certs && \
 # Cleanup leftovers.
