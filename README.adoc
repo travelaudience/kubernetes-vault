@@ -1,0 +1,386 @@
+= [Draft] kubernetes-vault
+Vault 0.8.2 on top of Kubernetes (backed by etcd 3.1.10).
+:icons: font
+:toc:
+
+== Pre-Requisites
+
+* A working GKE cluster running Kubernetes v1.7.5 with legacy authorization
+ *_disabled_*.
+* A working installation of `gcloud` configured to access the target Google
+ Cloud Platform project.
+* A working installation of `kubectl` configured to access the target cluster.
+* A working installation of https://github.com/cloudflare/cfssl[`cfssl`]
+ (more details <<#bookmark-cfssl, below>>).
+
+== Before proceeding
+
+[IMPORTANT]
+====
+Disabling legacy authorization means that _Role-Based Access Control_
+(https://kubernetes.io/docs/admin/authorization/rbac/[RBAC]) is enabled. RBAC
+is the new way to manage permissions in Kubernetes 1.6+. Reading the RBAC
+documentation and understanding the differences between RBAC and legacy
+authorization is strongly encouraged.
+====
+
+
+[IMPORTANT]
+====
+One must grant themselves the `cluster-admin` role *manually* before
+proceeding. This is due to a known issue with RBAC on GKE. To do that one must
+retrieve their identity using `gcloud` by running
+
+[source,bash]
+----
+$ MY_GCLOUD_USER=$(gcloud info \
+  | grep Account \
+  | awk -F'[][]' '{print $2}')
+----
+
+and then create a `ClusterRoleBinding` by running
+
+[source,bash]
+----
+$ kubectl create clusterrolebinding \
+  <cluster-role-binding-name> \
+  --clusterrole=cluster-admin \
+  --user=${MY_GCLOUD_USER}
+----
+
+One must replace `<cluster-role-binding-name>` in the above command with a
+unique, meaningful name. It is a good idea to include one's identity in the
+name (e.g., `j.doe-cluster-admin`).
+====
+
+
+[[bookmark-cfssl]]
+[IMPORTANT]
+====
+`cfssl` can be installed either
+
+* from https://github.com/cloudflare/cfssl[source] — this requires a Go 1.6+
+ environment setup on one's workstation; or
+* by downloading the https://pkg.cfssl.org/[binaries] for one's architecture
+ and dropping them on `${PATH}`.
+
+If downloading the binaries one needs only to download `cfssl` and `cfssljson`.
+====
+
+== Creating the `etcd` and `vault` namespaces
+
+To better group and manage the major components of the solution it is
+recommended to create two namespaces in the cluster — one for etcd-related
+resources and another one for Vault-related ones:
+
+[source,bash]
+----
+$ kubectl create namespace etcd
+namespace "etcd" created
+----
+
+[source,bash]
+----
+$ kubectl create namespace vault
+namespace "vault" created
+----
+
+[IMPORTANT]
+====
+If one does not follow this approach, or if one chooses different names for the
+namespaces, one must update the scripts and Kubernetes descriptors in this
+repository accordingly.
+====
+
+== Deploying etcd
+
+=== Deploying `etcd-operator`
+
+`etcd-operator` will be responsible for managing the etcd cluster that Vault
+will use as storage backend. It will handle tasks such as periodic backups and
+member recovery in disaster scenarios. `etcd-operator` and the cluster itself
+will live in the `etcd` namespace.
+
+To start with, and since RBAC is active on the cluster, one needs to setup
+adequate permissions. To do this one needs to
+
+* create a `ClusterRole` specifying a list of permissions;
+* create a dedicated `ServiceAccount` for `etcd-operator`;
+* create a `CluserRoleBinding` that grants these permissions to the service
+ account.
+
+This is made by running the following commands:
+
+[source,bash]
+----
+$ kubectl create -f ./etcd-operator/etcd-operator-clusterrole.yaml
+clusterrole "etcd-operator" created
+----
+
+[source,bash]
+----
+$ kubectl create -f ./etcd-operator/etcd-operator-serviceaccount.yaml
+serviceaccount "etcd-operator" created
+----
+
+[source,bash]
+----
+$ kubectl create -f ./etcd-operator/etcd-operator-clusterrolebinding.yaml
+clusterrolebinding "etcd-operator" created
+----
+
+One is now ready to deploy `etcd-operator` itself:
+
+[source,bash]
+----
+$ kubectl create -f ./etcd-operator/etcd-operator-deployment.yaml
+deployment "etcd-operator" created
+----
+
+[TIP]
+====
+At this point it is a good idea to check whether the deployment succeeded. One
+should wait a couple of minutes and then run:
+
+[source,bash]
+----
+$ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace etcd \
+  | grep etcd-operator \
+  | awk '{print $1}')
+----
+
+[source,bash]
+----
+$ kubectl logs --follow --namespace etcd "${ETCD_OPERATOR_POD_NAME}"
+time="2017-09-12T19:12:46Z" level=info msg="etcd-operator Version: 0.5.1"
+time="2017-09-12T19:12:46Z" level=info msg="Git SHA: cf7d8d5"
+time="2017-09-12T19:12:46Z" level=info msg="Go Version: go1.8.1"
+time="2017-09-12T19:12:46Z" level=info msg="Go OS/Arch: linux/amd64"
+(...)
+time="2017-09-12T19:13:19Z" level=info msg="Start reconciling" cluster-name=etcd-vault pkg=cluster
+time="2017-09-12T19:13:19Z" level=info msg="Finish reconciling" cluster-name=etcd-vault pkg=cluster
+(...)
+----
+
+If the output doesn't differ much from the example, and in particular if one
+doesn't see any error messages, it is safe to proceed.
+====
+
+=== Generating TLS certificates for etcd
+
+One is now almost ready to create the etcd cluster that will back the Vault
+deployment. However, before proceeding, one needs to generate TLS certificates
+to secure communications with the etcd cluster.
+
+[NOTE]
+====
+Even though the etcd cluster won't be exposed to outside the Kubernetes
+cluster, and even though Vault encrypts all data before it reaches the
+network, it is always a good security measure to enable TLS communication in
+the cluster.
+====
+
+One will need different types of certificates for establishing TLS:
+
+* A server certificate which etcd will use for serving _client-to-server_
+ requests (such as a request for a key).
+* A server certificate which etcd will use for serving _server-to-server_
+ requests (such as clustering operations).
+* A client certificate to _authenticate_ requests from `etcd-operator`.
+* A client certificate to _authenticate_ requests from Vault.
+
+One will also need a _Certificate Authority_ (CA) to sign these certificates.
+Since one will be securing communications in internal domains (e.g.,
+`etcd-0000.etcd-vault.etcd.svc.cluster.local`) one cannot rely on an external
+CA to provide these certificates. That being, one must bootstrap their own CA
+and use it to create and sign these certificates.
+
+Since `etcd-operator` has some strict requirements on the format of the
+input for TLS configuration, and due to the amount of certificates one needs
+to generate, a helper script is provided at `tls/create-etcd-certs.sh`.
+Running it will bootstrap the CA and sign all the necessary certificates.
+One only needs to run
+
+[source,bash]
+----
+$ ./tls/create-etcd-certs.sh
+2017/09/12 18:33:09 [INFO] generating a new CA key and certificate from CSR
+(...)
+----
+
+[[bookmark-tls-certs]]
+
+[IMPORTANT]
+====
+This will generate some `.crt` and `.key` files that will be placed in the
+`tls/certs` folder. One must make sure that they are kept in a safe place and
+safe from prying eyes. Leaking these files may result in a compromised etcd
+cluster.
+====
+
+[NOTE]
+====
+The Certificate Authority generated in this step *_is not_* the same thing as
+the Certificate Authority one is seeking to establish as a result of this
+project. Its only purpose is to establish trust in this particular setup of
+etcd and Vault, and it *_must not_* be used for anything else.
+====
+
+=== Creating Kubernetes secrets for the TLS certificates
+
+As mentioned above, `etcd-operator` has strict requirements regarding the names
+of the certificate files used to establish TLS communications. In particular,
+`etcd-operator` expects three Kubernetes secrets to be provided when creating a
+new etcd cluster:
+
+* `etcd-peer-tls` — a secret containing a certificate bundle for
+ _server-to-server_ communication.
+* `etcd-server-tls` — a secret containing a certificate bundle for
+ _client-to-server_ communication.
+* `etcd-client-tls` — a secret containing a certificate bundle for
+ authenticating `etcd-operator` requests.
+
+The structure of each secret is discussed in detail in the `etcd-operator`
+https://github.com/coreos/etcd-operator/blob/v0.5.1/doc/user/cluster_tls.md[docs].
+In order to ease the creation of these secrets when following this document, a
+helper script is provided at `tls/create-etcd-secrets.sh`. Running it will
+create all the necessary secrets in the Kubernetes cluster:
+
+[source,bash]
+----
+$ ./tls/create-etcd-secrets.sh
+secret "etcd-peer-tls" created
+secret "etcd-server-tls" created
+secret "etcd-client-tls" created
+secret "vault-etcd-tls" created
+----
+
+[NOTE]
+====
+Vault's `vault-etcd-tls` secret follows the `etcd-operator` conventions for
+consistency and ease of management. In practice it didn't need to follow the
+same conventions.
+====
+
+[NOTE]
+====
+At this point one should give <<bookmark-tls-certs,this note>> a second read
+and decide what to do with the certificate files in `tls/certs`, as they won't
+be needed for the remainder of the procedure.
+====
+
+=== Deploying the `etcd-vault` cluster
+
+Now that `etcd-operator` and the necessary Kubernetes secrets are adequately
+setup it is time to create the etcd cluster. To do that, one must run
+
+[source,bash]
+----
+$ kubectl create -f etcd/vault-etcd-etcdcluster.yaml
+etcdcluster "etcd-vault" created
+----
+
+[NOTE]
+====
+The cluster is created as a
+https://kubernetes.io/docs/concepts/api-extension/custom-resources/[custom resource]
+of type `etcdcluster` rather than as a traditional `Deployment` or `ReplicaSet`
+— it is `etcd-operator` that will take care of "translating" this
+custom resource into a set of pods according to the provided specification.
+====
+
+A few words on the link:./etcd/vault-etcd-etcdcluster.yaml[cluster specification]:
+
+* We are requesting a cluster with *_three nodes_*. This is believed to be
+ enough to the project's needs.
+* We are requesting the cluster to be based on *_etcd v3.1.10_*. This is
+ because `etcd-operator` doesn't fully support v3.2 yet.
+* We are requesting `etcd-operator` to make backups of our data *_every
+ hour_*, and to keep *_at most twelve backups_*. These are stored in a 2GB
+ https://cloud.google.com/compute/docs/disks/[Persistent Disk].
+* We are requesting for the cluster to be named `etcd-vault`.
+
+[TIP]
+====
+It is now a good idea to check whether the deployment suceeded by inspecting
+pods in the `etcd` namespace:
+
+[source,bash]
+----
+$ kubectl get pod --namespace etcd
+NAME                                         READY     STATUS    RESTARTS   AGE
+etcd-operator-3662686044-1v9wm               1/1       Running   0          19h
+etcd-vault-0000                              1/1       Running   0          6h
+etcd-vault-0001                              1/1       Running   0          6h
+etcd-vault-0002                              1/1       Running   0          6h
+etcd-vault-backup-sidecar-1593014069-237dq   1/1       Running   0          6h
+----
+
+If one's output is similar to this it is safe to proceed.
+====
+
+== Deploying Vault
+
+Vault's deployment is fairly simple. It is composed of three files:
+
+* `vault-configmap.yaml` — contains Vault's
+ https://www.vaultproject.io/docs/configuration/index.html[configuration]
+ file.
+* `vault-serviceaccount.yaml` — creates a service account for Vault.
+* `vault-deployment.yaml` — describes the deployment of Vault itself.
+
+In order to complete the deployment one only needs to run the following commands:
+
+[source,bash]
+----
+$ kubectl create -f vault/vault-configmap.yaml
+configmap "vault" created
+----
+
+[source,bash]
+----
+$ kubectl create -f vault/vault-serviceaccount.yaml
+serviceaccount "vault" created
+----
+
+[source,bash]
+----
+$ kubectl create -f vault/vault-deployment.yaml
+deployment "vault" created
+----
+
+== Initializing Vault
+
+(Terminal 1)
+
+[source,bash]
+----
+$ VAULT_POD_NAME=$(kubectl get --namespace vault pod \
+  | grep vault \
+  | awk '{print $1}')
+$ kubectl port-forward --namespace vault "${VAULT_POD_NAME}" 8200:8200
+Forwarding from 127.0.0.1:8200 -> 8200
+Forwarding from [::1]:8200 -> 8200
+----
+
+(Terminal 2)
+
+[source,bash]
+----
+$ export VAULT_ADDR='http://127.0.0.1:8200'
+$ vault init
+Unseal Key 1: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 3: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 4: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Unseal Key 5: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Initial Root Token: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+Vault initialized with 5 keys and a key threshold of 3. Please
+securely distribute the above keys. When the vault is re-sealed,
+restarted, or stopped, you must provide at least 3 of these keys
+to unseal it again.
+
+Vault does not store the master key. Without at least 3 keys,
+your vault will remain permanently sealed.
+----
