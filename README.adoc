@@ -24,7 +24,6 @@ documentation and understanding the differences between RBAC and legacy
 authorization is strongly encouraged.
 ====
 
-
 [IMPORTANT]
 ====
 One must grant themselves the `cluster-admin` role *manually* before
@@ -53,7 +52,6 @@ unique, meaningful name. It is a good idea to include one's identity in the
 name (e.g., `j.doe-cluster-admin`).
 ====
 
-
 [[bookmark-cfssl]]
 [IMPORTANT]
 ====
@@ -65,6 +63,11 @@ name (e.g., `j.doe-cluster-admin`).
  and dropping them on `${PATH}`.
 
 If downloading the binaries one needs only to download `cfssl` and `cfssljson`.
+====
+
+[IMPORTANT]
+====
+All commands should be run in a terminal and from the root of the repository.
 ====
 
 == Creating the `etcd` and `vault` namespaces
@@ -152,14 +155,11 @@ $ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace etcd \
 [source,bash]
 ----
 $ kubectl logs --follow --namespace etcd "${ETCD_OPERATOR_POD_NAME}"
-time="2017-09-12T19:12:46Z" level=info msg="etcd-operator Version: 0.5.1"
-time="2017-09-12T19:12:46Z" level=info msg="Git SHA: cf7d8d5"
-time="2017-09-12T19:12:46Z" level=info msg="Go Version: go1.8.1"
-time="2017-09-12T19:12:46Z" level=info msg="Go OS/Arch: linux/amd64"
-(...)
-time="2017-09-12T19:13:19Z" level=info msg="Start reconciling" cluster-name=etcd-vault pkg=cluster
-time="2017-09-12T19:13:19Z" level=info msg="Finish reconciling" cluster-name=etcd-vault pkg=cluster
-(...)
+time="2017-09-14T12:20:02Z" level=info msg="etcd-operator Version: 0.5.2"
+time="2017-09-14T12:20:02Z" level=info msg="Git SHA: 0fa2f7d"
+time="2017-09-14T12:20:02Z" level=info msg="Go Version: go1.8.1"
+time="2017-09-14T12:20:02Z" level=info msg="Go OS/Arch: linux/amd64"
+time="2017-09-14T12:20:02Z" level=info msg="Event(v1.ObjectReference{Kind:"Endpoints", Namespace:"etcd", Name:"etcd-operator", UID:"08f3a0d2-9947-11e7-809e-42010a9a00c3", APIVersion:"v1", ResourceVersion:"870", FieldPath:""}): type: 'Normal' reason: 'LeaderElection' etcd-operator-3160827283-4ksk8 became leader
 ----
 
 If the output doesn't differ much from the example, and in particular if one
@@ -190,16 +190,20 @@ One will need different types of certificates for establishing TLS:
 * A client certificate to _authenticate_ requests from Vault.
 
 One will also need a _Certificate Authority_ (CA) to sign these certificates.
-Since one will be securing communications in internal domains (e.g.,
+Since one will be securing communications in cluster-internal domains (such as
 `etcd-0000.etcd-vault.etcd.svc.cluster.local`) one cannot rely on an external
 CA to provide these certificates. That being, one must bootstrap their own CA
-and use it to create and sign these certificates.
+and use it to sign these certificates.
 
+[NOTE]
+====
 Since `etcd-operator` has some strict requirements on the format of the
 input for TLS configuration, and due to the amount of certificates one needs
 to generate, a helper script is provided at `tls/create-etcd-certs.sh`.
 Running it will bootstrap the CA and sign all the necessary certificates.
-One only needs to run
+====
+
+To generate the certificates run:
 
 [source,bash]
 ----
@@ -240,11 +244,16 @@ new etcd cluster:
 * `etcd-client-tls` — a secret containing a certificate bundle for
  authenticating `etcd-operator` requests.
 
+[NOTE]
+====
 The structure of each secret is discussed in detail in the `etcd-operator`
-https://github.com/coreos/etcd-operator/blob/v0.5.1/doc/user/cluster_tls.md[docs].
+https://github.com/coreos/etcd-operator/blob/v0.5.2/doc/user/cluster_tls.md[docs].
 In order to ease the creation of these secrets when following this document, a
 helper script is provided at `tls/create-etcd-secrets.sh`. Running it will
-create all the necessary secrets in the Kubernetes cluster:
+create all the necessary secrets in the Kubernetes cluster.
+====
+
+To create these secrets in the Kubernetes cluster one must run
 
 [source,bash]
 ----
@@ -255,11 +264,13 @@ secret "etcd-client-tls" created
 secret "vault-etcd-tls" created
 ----
 
+This will also create a `vault-etcd-tls` secret that will be needed later on.
+
 [NOTE]
 ====
-Vault's `vault-etcd-tls` secret follows the `etcd-operator` conventions for
-consistency and ease of management. In practice it didn't need to follow the
-same conventions.
+`vault-etcd-tls` secret follows the `etcd-operator` conventions for consistency
+and ease of management. In practice it didn't need to follow the same
+conventions.
 ====
 
 [NOTE]
@@ -286,9 +297,12 @@ The cluster is created as a
 https://kubernetes.io/docs/concepts/api-extension/custom-resources/[custom resource]
 of type `etcdcluster` rather than as a traditional `Deployment` or `ReplicaSet`
 — it is `etcd-operator` that will take care of "translating" this
-custom resource into a set of pods according to the provided specification.
+custom resource into a set of pods and services according to the provided
+specification.
 ====
 
+[NOTE]
+====
 A few words on the link:./etcd/vault-etcd-etcdcluster.yaml[cluster specification]:
 
 * We are requesting a cluster with *_three nodes_*. This is believed to be
@@ -299,6 +313,7 @@ A few words on the link:./etcd/vault-etcd-etcdcluster.yaml[cluster specification
  hour_*, and to keep *_at most twelve backups_*. These are stored in a 2GB
  https://cloud.google.com/compute/docs/disks/[Persistent Disk].
 * We are requesting for the cluster to be named `etcd-vault`.
+====
 
 [TIP]
 ====
@@ -324,12 +339,21 @@ If one's output is similar to this it is safe to proceed.
 Vault's deployment is fairly simple. It is composed of three files:
 
 * `vault-configmap.yaml` — contains Vault's
- https://www.vaultproject.io/docs/configuration/index.html[configuration]
- file.
+  https://www.vaultproject.io/docs/configuration/index.html[configuration]
+  file.
 * `vault-serviceaccount.yaml` — creates a service account for Vault.
 * `vault-deployment.yaml` — describes the deployment of Vault itself.
 
-In order to complete the deployment one only needs to run the following commands:
+
+[NOTE]
+====
+Creating a dedicated service account for Vault doesn't bring any immediate
+benefit. However, it allows us to follow the principle of least-privilege from
+an early stage and to prevent some known issues with `default` service
+accounts.
+====
+
+In order to complete the deployment one needs to run the following commands:
 
 [source,bash]
 ----
@@ -348,6 +372,71 @@ serviceaccount "vault" created
 $ kubectl create -f vault/vault-deployment.yaml
 deployment "vault" created
 ----
+
+[TIP]
+====
+It is now a good idea to check whether the deployment suceeded by inspecting
+pods in the `vault` namespace:
+
+[source,bash]
+----
+$ kubectl get pod --namespace vault
+NAME                     READY     STATUS    RESTARTS   AGE
+vault-2305212354-86j82   1/1       Running   0          30s
+----
+
+If one’s output is similar to this it is safe to proceed.
+====
+
+[TIP]
+====
+
+If one inspects the logs of the single Vault pod, one may find the following
+output:
+
+[source,bash]
+----
+$ VAULT_POD=$(kubectl get pod --namespace vault \
+  | grep vault \
+  | head -n 1 \
+  | awk '{print $1}')
+$ kubectl logs --namespace vault $VAULT_POD
+==> Vault server configuration:
+
+                     Cgo: disabled
+              Listener 1: tcp (addr: "0.0.0.0:8200", cluster address: "0.0.0.0:8201", tls: "disabled")
+               Log Level: info
+                   Mlock: supported: true, enabled: true
+                 Storage: etcd (HA disabled)
+                 Version: Vault v0.8.2
+             Version Sha: 9afe7330e06e486ee326621624f2077d88bc9511
+
+==> Vault server started! Log data will stream in below:
+
+2017/09/14 12:45:48.385955 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0000.etcd-vault.etcd.svc:2379 grpc: the connection is closing
+
+2017/09/14 12:45:48.386084 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0001.etcd-vault.etcd.svc:2379 grpc: the connection is closing
+
+2017/09/14 12:45:48.386099 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0002.etcd-vault.etcd.svc:2379 grpc: the connection is closing
+
+2017/09/14 12:45:48.394853 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-client.etcd.svc:2379 connection error: desc = "transport: authentication handshake failed: context canceled"
+
+2017/09/14 12:45:48.414714 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0001.etcd-vault.etcd.svc:2379 connection error: desc = "transport: authentication handshake failed: context canceled"
+
+2017/09/14 12:45:48.414998 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0000.etcd-vault.etcd.svc:2379 connection error: desc = "transport: authentication handshake failed: context canceled"
+
+2017/09/14 12:45:57.927998 [INFO ] core: security barrier not initialized
+2017/09/14 12:45:57.928873 [INFO ] core: security barrier not initialized
+----
+
+The few first `WARN` level messages represent failed attempts to connect to the
+etcd cluster. These are https://github.com/hashicorp/vault/issues/2518[being investigated]
+and do not represent a problem.
+
+The last two `INFO` level messages indicate that Vault hasn't been initialized
+yet. Vault will keep repeating these until one takes action.
+
+====
 
 == Initializing Vault
 
