@@ -3,6 +3,8 @@
 	"hosts": [
 		"*.etcd-vault.etcd.svc",
 		"etcd-vault-client.etcd.svc",
+		"*.etcd-vault.etcd.svc.cluster.local",
+		"etcd-vault-client.etcd.svc.cluster.local",
 		"localhost"
 	],
 	"key": {

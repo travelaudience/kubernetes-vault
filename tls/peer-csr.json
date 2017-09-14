@@ -1,7 +1,8 @@
 {
 	"CN": "*.etcd-vault.etcd.svc",
 	"hosts": [
-		"*.etcd-vault.etcd.svc"
+		"*.etcd-vault.etcd.svc",
+		"*.etcd-vault.etcd.svc.cluster.local"
 	],
 	"key": {
 		"algo": "rsa",
