@@ -237,12 +237,21 @@ of the certificate files used to establish TLS communications. In particular,
 `etcd-operator` expects three Kubernetes secrets to be provided when creating a
 new etcd cluster:
 
-* `etcd-peer-tls` — a secret containing a certificate bundle for
+[cols="2*"]
+|===
+^| Secret name
+^| Description
+
+^| `etcd-peer-tls`
+<| a secret containing a certificate bundle for
  _server-to-server_ communication.
-* `etcd-server-tls` — a secret containing a certificate bundle for
+^| `etcd-server-tls`
+<| a secret containing a certificate bundle for
  _client-to-server_ communication.
-* `etcd-client-tls` — a secret containing a certificate bundle for
+^| `etcd-client-tls`
+<| a secret containing a certificate bundle for
  authenticating `etcd-operator` requests.
+|===
 
 [NOTE]
 ====
