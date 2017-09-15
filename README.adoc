@@ -6,12 +6,14 @@ Vault 0.8.2 on top of Kubernetes (backed by etcd 3.1.10).
 == Pre-Requisites
 
 * A working GKE cluster running Kubernetes v1.7.5 with legacy authorization
- *_disabled_*.
+  *_disabled_*.
 * A working installation of `gcloud` configured to access the target Google
- Cloud Platform project.
+  Cloud Platform project.
 * A working installation of `kubectl` configured to access the target cluster.
 * A working installation of https://github.com/cloudflare/cfssl[`cfssl`]
- (more details <<#bookmark-cfssl, below>>).
+  (more details <<#bookmark-cfssl, below>>).
+* The https://https://www.vaultproject.io/[Vault] binary (more
+  details <<#bookmark-vault-binary, below>>).
 
 == Before proceeding
 
@@ -58,11 +60,19 @@ name (e.g., `j.doe-cluster-admin`).
 `cfssl` can be installed either
 
 * from https://github.com/cloudflare/cfssl[source] — this requires a Go 1.6+
- environment setup on one's workstation; or
+  environment setup on one's workstation; or
 * by downloading the https://pkg.cfssl.org/[binaries] for one's architecture
- and dropping them on `${PATH}`.
+  and dropping them on `${PATH}`.
 
 If downloading the binaries one needs only to download `cfssl` and `cfssljson`.
+====
+
+[IMPORTANT]
+====
+Vault can be installed by downloading the
+https://www.vaultproject.io/downloads.html[binary] for one's architecture and
+dropping it on `${PATH}`. The binary can act both as server and client, and
+will be needed later on to configure the Vault deployment.
 ====
 
 [IMPORTANT]
@@ -345,14 +355,40 @@ If one's output is similar to this it is safe to proceed.
 
 == Deploying Vault
 
-Vault's deployment is fairly simple. It is composed of three files:
+Vault's deployment has to be split in three parts:
 
-* `vault-configmap.yaml` — contains Vault's
+* One first creates the Vault `Deployment` itself, which creates a Vault
+  instance that is _unitialized_ and _sealed_. This means it will not accept
+  requests except for the ones required for the initial configuration process.
+* One then proceeds to _initializing_ and _unsealing_ Vault. This will leave
+  Vault in a state in which it can accept requests.
+* One finally exposes the Vault deployment to outside the Kubernetes cluster
+  and secures the deployment.
+
+=== Initial deployment
+
+Vault's deployment is composed of five files:
+
+[cols="2*"]
+|===
+
+^|File
+^|Description
+
+^|`vault-configmap.yaml`
+<|contains Vault's
   https://www.vaultproject.io/docs/configuration/index.html[configuration]
-  file.
-* `vault-serviceaccount.yaml` — creates a service account for Vault.
-* `vault-deployment.yaml` — describes the deployment of Vault itself.
+  file
+^|`vault-serviceaccount.yaml`
+<|creates a service account for Vault
+^|`vault-deployment.yaml`
+<|describes the deployment of Vault itself.
+^|`vault-service.yaml`
+<|exposes Vault as a service inside the Kubernetes cluster
+^|`vault-ingress.yaml`
+<|exposes Vault to outside the Kubernetes cluster
 
+|===
 
 [NOTE]
 ====
@@ -362,7 +398,9 @@ an early stage and to prevent some known issues with `default` service
 accounts.
 ====
 
-In order to complete the deployment one needs to run the following commands:
+In this first part one will be creating the first three resources, leaving the
+service and the ingress resources for later. In order to start the deployment
+one needs to run the following commands:
 
 [source,bash]
 ----
@@ -382,26 +420,31 @@ $ kubectl create -f vault/vault-deployment.yaml
 deployment "vault" created
 ----
 
+As mentioned above, this creates a Vault instance that is _unitialized_ and
+_sealed_. This means it will not accept requests except for the ones required
+for the initial configuration process.
+
 [TIP]
 ====
 It is now a good idea to check whether the deployment suceeded by inspecting
-pods in the `vault` namespace:
+pods in the `vault` namespace. One should wait for a few seconds and run
 
 [source,bash]
 ----
 $ kubectl get pod --namespace vault
 NAME                     READY     STATUS    RESTARTS   AGE
-vault-2305212354-86j82   1/1       Running   0          30s
+vault-2305212354-86j82   0/1       Running   0          30s
 ----
 
-If one’s output is similar to this it is safe to proceed.
+If one’s output is similar to this it is safe to proceed, even though the
+number of ready pods is zero. This is because Vault hasn't been initialized and
+unsealed yet.
 ====
 
 [TIP]
 ====
 
-If one inspects the logs of the single Vault pod, one may find the following
-output:
+If one inspects the logs of the Vault pod, one will find the following output:
 
 [source,bash]
 ----
@@ -422,57 +465,57 @@ $ kubectl logs --namespace vault $VAULT_POD
 
 ==> Vault server started! Log data will stream in below:
 
-2017/09/14 12:45:48.385955 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0000.etcd-vault.etcd.svc:2379 grpc: the connection is closing
-
-2017/09/14 12:45:48.386084 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0001.etcd-vault.etcd.svc:2379 grpc: the connection is closing
-
-2017/09/14 12:45:48.386099 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0002.etcd-vault.etcd.svc:2379 grpc: the connection is closing
-
-2017/09/14 12:45:48.394853 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-client.etcd.svc:2379 connection error: desc = "transport: authentication handshake failed: context canceled"
-
-2017/09/14 12:45:48.414714 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0001.etcd-vault.etcd.svc:2379 connection error: desc = "transport: authentication handshake failed: context canceled"
-
-2017/09/14 12:45:48.414998 [WARN ] Failed to dial %s: %v; please retry. etcd-vault-0000.etcd-vault.etcd.svc:2379 connection error: desc = "transport: authentication handshake failed: context canceled"
-
-2017/09/14 12:45:57.927998 [INFO ] core: security barrier not initialized
-2017/09/14 12:45:57.928873 [INFO ] core: security barrier not initialized
+2017/09/15 09:04:12.495266 [INFO ] core: security barrier not initialized
+2017/09/15 09:04:12.499167 [INFO ] core: security barrier not initialized
+2017/09/15 09:04:17.494711 [INFO ] core: security barrier not initialized
+2017/09/15 09:04:17.498181 [INFO ] core: security barrier not initialized
 ----
 
-The few first `WARN` level messages represent failed attempts to connect to the
-etcd cluster. These are https://github.com/hashicorp/vault/issues/2518[being investigated]
-and do not represent a problem.
-
-The last two `INFO` level messages indicate that Vault hasn't been initialized
+These `INFO` level messages indicate that Vault hasn't been initialized
 yet. Vault will keep repeating these until one takes action.
 
 ====
 
-== Initializing Vault
+=== Initializing and unsealing Vault
 
-(Terminal 1)
+[IMPORTANT]
+====
+This procedure must be executed by a trusted individual. One will be handling
+information that, if leaked, can compromise the security of the data stored by
+Vault.
+====
+
+Vault must now be initialized and unsealed. As the Vault pod are not accessible
+from outside the cluster at this time, one needs to establish port-forwarding
+to the local machine. To do that, one should run the following in one terminal
+window:
 
 [source,bash]
 ----
 $ VAULT_POD_NAME=$(kubectl get --namespace vault pod \
   | grep vault \
-  | awk '{print $1}')
-$ kubectl port-forward --namespace vault "${VAULT_POD_NAME}" 8200:8200
+  | awk '{print $1}') // <1>
+$ kubectl port-forward --namespace vault "${VAULT_POD_NAME}" 8200:8200 // <2>
 Forwarding from 127.0.0.1:8200 -> 8200
 Forwarding from [::1]:8200 -> 8200
 ----
+<1> Gets the name of the Vault pod and stores it in the `VAULT_POD_NAME`
+    environment variable.
+<2> Forwards port `8200` of the Vault pod to the local `8200` pod.
 
-(Terminal 2)
+Now, one should leave this command running and open a second terminal window.
+In this new window one should run the following commands:
 
 [source,bash]
 ----
-$ export VAULT_ADDR='http://127.0.0.1:8200'
-$ vault init
-Unseal Key 1: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Unseal Key 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Unseal Key 3: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Unseal Key 4: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Unseal Key 5: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Initial Root Token: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+$ export VAULT_ADDR='http://127.0.0.1:8200' // <1>
+$ vault init // <2>
+Unseal Key 1: +G8hVWrVaOnEQquasRyWdE2RAFuCQumodY6YgzfJzGOD // <3>
+Unseal Key 2: XpfepkWVkMWLMJRyranNQDSofE1TjXTJho+ImaozyQ6X // <3>
+Unseal Key 3: wfFvslot+7s0ainbE40iIhfSk7L6rs+4prc0pjQzvxtJ // <3>
+Unseal Key 4: BhWFOwkg2QTW5DkBfzZWTygWAQ3IA6pMGtUF1i+wUxOr // <3>
+Unseal Key 5: iLGQSSJhBqe65zpkliOATGcCe+7d2L0wn5Nl3KO3PZW9 // <3>
+Initial Root Token: c689c370-22ec-8268-0ea8-4cbb50c2e00c // <4>
 
 Vault initialized with 5 keys and a key threshold of 3. Please
 securely distribute the above keys. When the vault is re-sealed,
@@ -482,3 +525,113 @@ to unseal it again.
 Vault does not store the master key. Without at least 3 keys,
 your vault will remain permanently sealed.
 ----
+<1> Sets the value of the `VAULT_ADDR` environment variable to the address
+    where the Vault pod is exposed locally.
+<2> Initializes Vault.
+<3> This instance's _unseal keys_.
+<4> This instance's _initial root token_.
+
+At this point it is of extreme importance to:
+
+* safely store the unseal keys shown in the `vault init` command output.
+* distribute the unseal keys among trusted individuals, making sure each gets
+  only one unseal key.
+
+[TIP]
+====
+Although it may seem old-fashinoned and paranoid, it is a good idea to use
+paper and pen to store the unseal keys, and have each trusted individual store
+them in a safe place like a _safe box_.
+====
+
+[TIP]
+====
+One is now considered a trusted individual and, as such, one can keep one
+unseal key for themself and distribute the remaining four.
+====
+
+Now that Vault is initialized it is time to unseal it so that it can be used.
+In the same terminal window where one ran `vault init` one should run
+
+[source,bash]
+----
+$ vault unseal
+Key (will be hidden): // <1>
+Sealed: true // <2>
+Key Shares: 5
+Key Threshold: 3 // <2>
+Unseal Progress: 1 // <2>
+Unseal Nonce: 0dfa6cf3-abb9-c5cd-4725-21f89cc2feea
+----
+<1> At this point one should input one of the unseal keys.
+<2> The Vault instance is _sealed_, and the _key threshold_ is 3. This means
+    that Vault requires the usage of three different unseal keys to complete
+    the unseal process.
+
+One should now repeat this command, using two out of the other four unseal
+keys. In the last step, one will receive the following output:
+
+[source,bash]
+----
+$ vault unseal
+Key (will be hidden): // <1>
+Sealed: false // <2>
+Key Shares: 5
+Key Threshold: 3
+Unseal Progress: 0
+Unseal Nonce:
+----
+<1> At this point one should input one of the unseal keys not yet used.
+<2> The Vault instance is _unsealed_.
+
+Vault is now unsealed and ready to serve requests. However, there is one last
+step one should do before proceeding — to _revoke_ the initial root token.
+While this may seem counter-intuitive it is in fact a recommended practice. In
+the same terminal window run:
+
+[source,bash]
+----
+$ vault auth c689c370-22ec-8268-0ea8-4cbb50c2e00c // <1>
+Successfully authenticated! You are now logged in.
+token: c689c370-22ec-8268-0ea8-4cbb50c2e00c // <1>
+token_duration: 0
+token_policies: [root]
+----
+
+[source,bash]
+----
+$ vault token-revoke c689c370-22ec-8268-0ea8-4cbb50c2e00c // <1>
+Success! Token revoked if it existed.
+----
+<1> This corresponds to the _initial root token_.
+
+Vault is now initialized and unsealed, and the initial root token has been
+revoked. It is now time to continue the deployment by exposing the Vault
+deployment to outside the Kubernetes cluster.
+
+[TIP]
+====
+One may now return to the terminal window where `kubectl port-forward` is
+running and terminate the process using Ctrl-C.
+====
+
+[TIP]
+====
+If one inspects pods in the `vault` namespace one will find that they are now
+marked as _Ready_. This is because the Vault instance is now initialized and
+unsealed.
+
+[source,bash]
+----
+$ kubectl get pod --namespace vault
+NAME                     READY     STATUS    RESTARTS   AGE
+vault-4120637469-hcwtn   1/1       Running   0          1h
+----
+====
+
+=== Exposing Vault
+
+[IMPORTANT]
+====
+TODO
+====
