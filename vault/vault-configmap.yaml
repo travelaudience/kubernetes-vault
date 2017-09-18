@@ -14,6 +14,7 @@ data:
         address       = "https://etcd-vault-client.etcd.svc:2379"
         etcd_api      = "v3"
         path          = "vault/"
+        sync          = "false"
         tls_ca_file   = "/vault/tls/vault-etcd-ca.crt"
         tls_cert_file = "/vault/tls/vault-etcd.crt"
         tls_key_file  = "/vault/tls/vault-etcd.key"
