@@ -367,7 +367,7 @@ Vault's deployment has to be split in three parts:
 
 === Initial deployment
 
-Vault's deployment is composed of five files:
+Vault's deployment is composed of six files:
 
 [cols="2*"]
 |===
@@ -375,6 +375,8 @@ Vault's deployment is composed of five files:
 ^|File
 ^|Description
 
+^|`nginx-configmap.yaml`
+<|contains Nginx's configuration file
 ^|`vault-configmap.yaml`
 <|contains Vault's
   https://www.vaultproject.io/docs/configuration/index.html[configuration]
@@ -401,6 +403,12 @@ accounts.
 In this first part one will be creating the first three resources, leaving the
 service and the ingress resources for later. In order to start the deployment
 one needs to run the following commands:
+
+[source,bash]
+----
+$ kubectl create -f vault/nginx-configmap.yaml
+configmap "vault" created
+----
 
 [source,bash]
 ----
@@ -433,18 +441,19 @@ pods in the `vault` namespace. One should wait for a few seconds and run
 ----
 $ kubectl get pod --namespace vault
 NAME                     READY     STATUS    RESTARTS   AGE
-vault-2305212354-86j82   0/1       Running   0          30s
+vault-2305212354-86j82   1/2       Running   0          1m
 ----
 
 If one’s output is similar to this it is safe to proceed, even though the
-number of ready pods is zero. This is because Vault hasn't been initialized and
+number of ready pods is one. This is because Vault hasn't been initialized and
 unsealed yet.
 ====
 
 [TIP]
 ====
 
-If one inspects the logs of the Vault pod, one will find the following output:
+If one inspects the logs of the Vault container, one will find the following
+output:
 
 [source,bash]
 ----
@@ -452,7 +461,7 @@ $ VAULT_POD=$(kubectl get pod --namespace vault \
   | grep vault \
   | head -n 1 \
   | awk '{print $1}')
-$ kubectl logs --namespace vault $VAULT_POD
+$ kubectl logs --namespace vault --container vault "$VAULT_POD"
 ==> Vault server configuration:
 
                      Cgo: disabled
@@ -508,7 +517,7 @@ In this new window one should run the following commands:
 
 [source,bash]
 ----
-$ export VAULT_ADDR='http://127.0.0.1:8200' // <1>
+$ export VAULT_ADDR="http://127.0.0.1:8200" // <1>
 $ vault init // <2>
 Unseal Key 1: +G8hVWrVaOnEQquasRyWdE2RAFuCQumodY6YgzfJzGOD // <3>
 Unseal Key 2: XpfepkWVkMWLMJRyranNQDSofE1TjXTJho+ImaozyQ6X // <3>
@@ -625,13 +634,173 @@ unsealed.
 ----
 $ kubectl get pod --namespace vault
 NAME                     READY     STATUS    RESTARTS   AGE
-vault-4120637469-hcwtn   1/1       Running   0          1h
+vault-4120637469-hcwtn   2/2       Running   0          5m
 ----
 ====
 
 === Exposing Vault
 
+One will now expose Vault to outside the cluster, so that applications running
+in other clusters can access it. To do this one needs to create a global static
+IP in GCP:
+
+[source,bash]
+----
+$ gcloud compute addresses create vault --global
+Created [https://www.googleapis.com/compute/v1/projects/<project-name>/global/addresses/vault].
+----
+
+[source,bash]
+----
+$ gcloud compute addresses describe vault --global
+address: 35.201.114.242 // <1>
+creationTimestamp: '2017-09-18T01:52:08.285-07:00'
+description: ''
+id: '3141996435895105495'
+ipVersion: IPV4
+kind: compute#address
+name: vault // <2>
+selfLink: https://www.googleapis.com/compute/v1/projects/<project-name>/global/addresses/vault
+status: IN_USE
+users:
+- https://www.googleapis.com/compute/v1/projects/<project-name>/global/forwardingRules/k8s-fw-vault-vault--cdf21de8575bf56e
+----
+<1> The IP address one will use to expose Vault.
+<2> The name of the IP address one will use to expose Vault.
+
+NOTE: If one creates the IP address with a different name one must update the
+`vault/vault-ingress.yaml` file accordingly.
+
+After the `vault` IP address is created, one must configure the DNS of the
+domain one is going to use to expose Vault. For instance, if one wants to
+expose Vault at `https://vault.example.com` one has to create a DNS record with
+type `A` and name `vault` pointing to the abovementioned IP address at the DNS
+provider for the `example.com` domain. The steps to do this are highly
+dependent on the DNS provider for the domain and cannot be detailed here.
+
 [IMPORTANT]
 ====
-TODO
+From this point it is assumed that DNS has been properly configured
+and that changes have propagated. One can test whether changes have propagated
+by using `dig`:
+
+[source,bash]
+----
+dig @8.8.8.8 vault.example.com A // <1>
+
+; <<>> DiG 9.8.3-P1 <<>> @8.8.8.8 vault.example.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 43874
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+
+;; QUESTION SECTION:
+;vault.example.space.		IN	A
+
+;; ANSWER SECTION:
+vault.example.space.	299	IN	A	35.201.114.242 // <2>
+
+;; Query time: 61 msec
+;; SERVER: 8.8.8.8#53(8.8.8.8)
+;; WHEN: Mon Sep 18 12:10:39 2017
+;; MSG SIZE  rcvd: 53
+----
+<1> Looks-up `A` records for `vault.example.com` at Google Public DNS (`8.8.8.8`).
+<2> This must match the global IP address created above.
+
+It is highly recommended to wait for changes to propagate before proceeding.
 ====
+
+[IMPORTANT]
+====
+Before running the following commands one should update the
+`vault/vault-ingress.yaml` file with the actual domain name used to expose
+Vault.
+====
+
+Once the `vault` IP address is created one must create the service and ingress
+resources:
+
+[source,bash]
+----
+$ kubectl create -f vault/vault-service.yaml
+service "vault" created
+----
+
+[source,bash]
+----
+$ kubectl create -f vault/vault-ingress.yaml
+ingress "vault" created
+----
+
+[NOTE]
+====
+This will create a
+https://cloud.google.com/compute/docs/load-balancing/[_global *external* load-balancer_]
+pointing to the Vault deployment.
+====
+
+In order to secure Vault external access one must now configure HTTPS access.
+The easiest and cheapest way to obtain a trusted TLS certicate is using
+https://letsencrypt.org/[Let's Encrypt], and the easiest way to automate the
+process of obtaining and renewing certificates from Let's Encrypt is by using
+https://github.com/jetstack/kube-lego[`kube-lego`]:
+
+[IMPORTANT]
+====
+Before running the following commands one should update the
+`kube-lego/kube-lego.yaml` file with one's actual email address.
+====
+
+[source,bash]
+----
+$ kubectl create -f ./kube-lego/kube-lego-bundle.yaml
+namespace "kube-lego" created
+configmap "kube-lego" created
+deployment "kube-lego" created
+----
+
+[TIP]
+====
+As soon as it starts, `kube-lego` will start monitoring ingress resources and
+requesting certificates from Let's Encrypt. One can check that the deployment
+succeeded by following these steps:
+
+[source,bash]
+----
+$ KUBE_LEGO_POD_NAME=$(kubectl get --namespace kube-lego pod \
+  | grep kube-lego \
+  | awk '{print $1}')
+----
+
+[source,bash]
+----
+$ kubectl logs --namespace kube-lego "${KUBE_LEGO_POD_NAME}"
+time="2017-09-18T11:22:05Z" level=info msg="kube-lego 0.1.5-a9592932 starting" context=kubelego
+time="2017-09-18T11:22:05Z" level=info msg="connecting to kubernetes api: https://10.15.240.1:443" context=kubelego
+time="2017-09-18T11:22:05Z" level=info msg="successfully connected to kubernetes api v1.7.5" context=kubelego
+time="2017-09-18T11:22:05Z" level=info msg="server listening on http://:8080/" context=acme
+(...)
+----
+
+====
+
+[NOTE]
+====
+Let's Encrypt must be able to reach port `80` on domains for which certificates
+are requested, hence the annotation `kubernetes.io/ingress.allow-http`
+in `vault/vault-ingress.yaml` must be set to `"true"`.
+====
+
+[NOTE]
+====
+It is safe to set the abovementioned annotation to `"true"`—the Nginx instance
+that is deployed alongside Vault makes sure that Vault only communicates over
+HTTPS. Any request to Vault via HTTP will be rejected.
+====
+
+If everything goes well, after a while one will be able to access
+https://vault.example.com/v1/sys/health securely. On the other hand, if one
+tries to access http://vault.example.com/v1/sys/health one will get an error
+response.

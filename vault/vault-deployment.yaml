@@ -20,17 +20,17 @@ spec:
         - server
         ports:
         - containerPort: 8200
-          name: api
+          name: vault
         livenessProbe:
           httpGet:
             path: /v1/sys/health?&sealedcode=200&uninitcode=200&standbyok=200
-            port: api
+            port: avaultpi
           initialDelaySeconds: 10
           periodSeconds: 5
         readinessProbe:
           httpGet:
             path: /v1/sys/health?standbyok=200
-            port: api
+            port: vault
           initialDelaySeconds: 10
           periodSeconds: 5
         securityContext:
@@ -42,8 +42,32 @@ spec:
           name: vault-config
         - mountPath: /vault/tls
           name: vault-etcd-tls
+      - name: nginx
+        image: "nginx:1.12.1-alpine"
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: nginx
+        livenessProbe:
+          httpGet:
+            path: /
+            port: nginx
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: nginx
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /etc/nginx/conf.d
+          name: nginx-config
       serviceAccountName: vault
       volumes:
+      - configMap:
+          name: nginx
+        name: nginx-config
       - configMap:
           name: vault
         name: vault-config

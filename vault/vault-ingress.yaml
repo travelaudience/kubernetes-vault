@@ -1,0 +1,23 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.allow-http: "true"
+    kubernetes.io/ingress.class: gce
+    kubernetes.io/ingress.global-static-ip-name: vault
+    kubernetes.io/tls-acme: "true"
+  name: vault
+  namespace: vault
+spec:
+  rules:
+    - host: vault.example.com
+      http:
+        paths:
+          - backend:
+              serviceName: vault
+              servicePort: 8080
+            path: /*
+  tls:
+    - hosts:
+        - vault.example.com
+      secretName: vault-tls
