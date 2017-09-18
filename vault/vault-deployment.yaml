@@ -23,13 +23,13 @@ spec:
           name: api
         livenessProbe:
           httpGet:
-            path: /v1/sys/health?&sealedcode=200&uninitcode=200
+            path: /v1/sys/health?&sealedcode=200&uninitcode=200&standbyok=200
             port: api
           initialDelaySeconds: 10
           periodSeconds: 5
         readinessProbe:
           httpGet:
-            path: /v1/sys/health?&sealedcode=200&uninitcode=200
+            path: /v1/sys/health?standbyok=200
             port: api
           initialDelaySeconds: 10
           periodSeconds: 5
