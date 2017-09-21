@@ -159,6 +159,7 @@ should wait for a few seconds and then run:
 ----
 $ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace etcd \
   | grep etcd-operator \
+  | awk 'NR==1' \
   | awk '{print $1}')
 ----
 
@@ -459,7 +460,7 @@ output:
 ----
 $ VAULT_POD_NAME=$(kubectl get pod --namespace vault \
   | grep vault \
-  | head -n 1 \
+  | awk 'NR==1' \
   | awk '{print $1}')
 $ kubectl logs --namespace vault --container vault "${VAULT_POD_NAME}"
 ==> Vault server configuration:
@@ -504,7 +505,7 @@ window:
 ----
 $ VAULT_POD_NAME=$(kubectl get pod --namespace vault \
   | grep vault \
-  | head -n 1 \
+  | awk 'NR==1' \
   | awk '{print $1}') // <1>
 $ kubectl port-forward --namespace vault "${VAULT_POD_NAME}" 8200:8200 // <2>
 Forwarding from 127.0.0.1:8200 -> 8200
