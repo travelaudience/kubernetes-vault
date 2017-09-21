@@ -469,15 +469,16 @@ $ kubectl logs --namespace vault --container vault "${VAULT_POD_NAME}"
                Log Level: info
                    Mlock: supported: true, enabled: true
                  Storage: etcd (HA disabled)
-                 Version: Vault v0.8.2
-             Version Sha: 9afe7330e06e486ee326621624f2077d88bc9511
+                 Version: Vault v0.8.3
+             Version Sha: 6b29fb2b7f70ed538ee2b3c057335d706b6d4e36
 
 ==> Vault server started! Log data will stream in below:
 
-2017/09/15 09:04:12.495266 [INFO ] core: security barrier not initialized
-2017/09/15 09:04:12.499167 [INFO ] core: security barrier not initialized
-2017/09/15 09:04:17.494711 [INFO ] core: security barrier not initialized
-2017/09/15 09:04:17.498181 [INFO ] core: security barrier not initialized
+(...)
+2017/09/20 15:01:55.772792 [INFO ] core: security barrier not initialized
+2017/09/20 15:02:00.774962 [INFO ] core: security barrier not initialized
+2017/09/20 15:02:05.770796 [INFO ] core: security barrier not initialized
+2017/09/20 15:02:10.768767 [INFO ] core: security barrier not initialized
 ----
 
 These `INFO` level messages indicate that Vault hasn't been initialized

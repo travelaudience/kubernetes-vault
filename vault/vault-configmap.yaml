@@ -11,7 +11,7 @@ data:
       }
 
       storage "etcd" {
-        address       = "https://etcd-vault-client.etcd.svc:2379"
+        address       = "https://etcd-vault-client.etcd.svc.cluster.local:2379"
         etcd_api      = "v3"
         path          = "vault/"
         sync          = "false"
