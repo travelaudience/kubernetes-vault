@@ -419,7 +419,7 @@ accounts.
 
 [NOTE]
 ====
-The **_headless service_** service defined in `vault-service.yaml` supports
+The *_headless service_* service defined in `vault-service.yaml` supports
 both the `StatefulSet` defined in `vault-statefulset.yaml` as well as
 clustering and high-availability of the Vault deployment.
 ====
@@ -490,7 +490,7 @@ vault-1   1/2       Running   0          30s
 ----
 
 If one’s output is similar to this it is safe to proceed to the next section,
-**even though the pods are not in the `Ready` state**. This happens because
+*even though the pods are not in the `Ready` state*. This happens because
 Vault hasn't been initialized and unsealed yet.
 ====
 
@@ -500,8 +500,8 @@ Going a bit deeper, the behavior described above happens because a
 `ReadinessProbe` is set on each Vault pod. This probe will only mark a pod as
 `Ready` when these two conditions are satisfied:
 
-* The Vault storage has been **_initialized_**.
-* That particular Vault instance has been **_unsealed_**.
+* The Vault storage has been *_initialized_*.
+* That particular Vault instance has been *_unsealed_*.
 ====
 
 [TIP]
@@ -672,7 +672,7 @@ vault-1   1/2       Running   0          7m
 ====
 
 Now, one must also _unseal_ the second Vault instance. One should get back to
-the **_first terminal window_** — where `kubectl port-forward` is running — and
+the *_first terminal window_* — where `kubectl port-forward` is running — and
 stop the running process (using `Ctrl-C`). Then, one should run
 
 [source,bash]
@@ -683,7 +683,7 @@ Forwarding from [::1]:28200 -> 8200
 ----
 <1> Forwards port `8200` of the first Vault pod to the local `28200` port.
 
-Now one should get back to the **_second terminal window_** — where
+Now one should get back to the *_second terminal window_* — where
 `vault init` and `vault unseal` were run — and run the following commands:
 
 [source,bash]
@@ -738,7 +738,7 @@ $ kubectl logs --container vault --namespace vault vault-1
 ----
 
 The last log message indicates that this Vault instance will operate as a
-**_standby_**. This means it will accept requests and forward them to the
+*_standby_*. This means it will accept requests and forward them to the
 cluster leader (which, in this case, is `vault-0`). To learn more about
 clustering and high-availability in Vault one should head over to
 https://www.vaultproject.io/docs/concepts/ha.html[Vault's HA documentation].
@@ -777,7 +777,7 @@ running and terminate the process using Ctrl-C.
 
 [IMPORTANT]
 ====
-The **_unseal_** procedure must be performed every time a Vault pod crashes or
+The *_unseal_* procedure must be performed every time a Vault pod crashes or
 restarts for some reason.
 ====
 
