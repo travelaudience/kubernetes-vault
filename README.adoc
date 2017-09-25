@@ -370,7 +370,7 @@ If one's output is similar to this it is safe to proceed.
 Vault's deployment has to be split in three parts:
 
 * One first creates the Vault `StatefulSet` itself, which creates two Vault
-  instances that are _unitialized_ and _sealed_. This means they will not
+  instances that are _uninitialized_ and _sealed_. This means they will not
   accept any requests except for the ones required for the initial
   configuration process.
 * One then proceeds to _initializing_ the Vault storage backend and _unsealing_
@@ -472,9 +472,9 @@ $ kubectl create -f vault/vault-statefulset.yaml
 statefulset "vault" created
 ----
 
-As mentioned above, this will create two Vault instances that are _unitialized_
-and _sealed_. This means that they will not accept requests except for the ones
-required for the initial configuration process.
+As mentioned above, this will create two Vault instances that are
+_uninitialized_ and _sealed_. This means that they will not accept requests
+except for the ones required for the initial configuration process.
 
 [TIP]
 ====
