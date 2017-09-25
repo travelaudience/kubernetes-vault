@@ -3,57 +3,122 @@ kind: Namespace
 metadata:
   name: kube-lego
 ---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  labels:
+    app: kube-lego
+  name: kube-lego
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - endpoints
+  - secrets
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app: kube-lego
+  name: kube-lego
+  namespace: kube-lego
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app: kube-lego
+  name: kube-lego
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-lego
+subjects:
+  - kind: ServiceAccount
+    name: kube-lego
+    namespace: kube-lego
+---
 apiVersion: v1
 data: 
   lego.email: john.doe@example.com
   lego.url: "https://acme-v01.api.letsencrypt.org/directory"
 kind: ConfigMap
-metadata: 
+metadata:
+  labels:
+    app: kube-lego
   name: kube-lego
   namespace: kube-lego
 ---
 apiVersion: extensions/v1beta1
 kind: Deployment
-metadata: 
+metadata:
+  labels:
+    app: kube-lego
   name: kube-lego
   namespace: kube-lego
-spec: 
+spec:
   replicas: 1
-  template: 
-    metadata: 
-      labels: 
+  template:
+    metadata:
+      labels:
         app: kube-lego
-    spec: 
+    spec:
       containers:
-        - env: 
+        - env:
             - name: LEGO_LOG_LEVEL
               value: info
             - name: LEGO_EMAIL
-              valueFrom: 
-                configMapKeyRef: 
+              valueFrom:
+                configMapKeyRef:
                   key: lego.email
                   name: kube-lego
             - name: LEGO_URL
-              valueFrom: 
-                configMapKeyRef: 
+              valueFrom:
+                configMapKeyRef:
                   key: lego.url
                   name: kube-lego
             - name: LEGO_NAMESPACE
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: metadata.namespace
             - name: LEGO_POD_IP
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: status.podIP
           image: "jetstack/kube-lego:0.1.5"
           imagePullPolicy: Always
           name: kube-lego
-          ports: 
+          ports:
             - containerPort: 8080
-          readinessProbe: 
-            httpGet: 
+          readinessProbe:
+            httpGet:
               path: /healthz
               port: 8080
             initialDelaySeconds: 5
             timeoutSeconds: 1
+      serviceAccountName: kube-lego
