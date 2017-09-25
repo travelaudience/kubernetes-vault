@@ -118,9 +118,10 @@ repository accordingly.
 === Deploying `etcd-operator`
 
 `etcd-operator` will be responsible for managing the etcd cluster that Vault
-will use as storage backend. It will handle tasks such as periodic backups and
-member recovery in disaster scenarios. `etcd-operator` and the cluster itself
-will live in the `etcd` namespace.
+will use as storage backend. It will handle tasks such as
+<<#bookmark-etcd-vault-periodic-backups,periodic backups>> and member recovery
+in disaster scenarios. `etcd-operator` and the cluster itself will live in the
+`etcd` namespace.
 
 To start with, and since RBAC is active on the cluster, one needs to setup
 adequate permissions. To do this one needs to
@@ -328,6 +329,8 @@ of type `etcdcluster` rather than as a traditional `Deployment` or `ReplicaSet`
 custom resource into a set of pods and services according to the provided
 specification.
 ====
+
+[[bookmark-etcd-vault-periodic-backups]]
 
 [NOTE]
 ====
