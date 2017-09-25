@@ -3,6 +3,14 @@ Vault 0.8.2 on top of Kubernetes (backed by etcd 3.1.10).
 :icons: font
 :toc:
 
+ifdef::env-github[]
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
 == Pre-Requisites
 
 * A working GKE cluster running Kubernetes v1.7.5 with legacy authorization
@@ -610,8 +618,23 @@ Unseal Nonce: 0dfa6cf3-abb9-c5cd-4725-21f89cc2feea
     that Vault requires the usage of three different unseal keys to complete
     the unseal process.
 
-One should now repeat this command, using two out of the other four unseal
-keys. In the last step, one will receive the following output:
+One should now repeat this command, using one of the other four unseal keys:
+
+[source,bash]
+----
+$ vault unseal
+Key (will be hidden): // <1>
+Sealed: false // <2>
+Key Shares: 5
+Key Threshold: 3
+Unseal Progress: 0
+Unseal Nonce:
+----
+<1> At this point one should input one of the unseal keys not yet used.
+<2> The Vault instance is still _unsealed_.
+
+One should now repeat this command again. One will now receive the following
+output:
 
 [source,bash]
 ----
@@ -626,7 +649,11 @@ Unseal Nonce:
 <1> At this point one should input one of the unseal keys not yet used.
 <2> The Vault instance is _unsealed_.
 
-The first Vault pod is now unsealed and ready to serve requests:
+The first Vault pod is now unsealed and ready to serve requests.
+
+[TIP]
+====
+Inspecting pods in the `vault` namespace should now output something similar to
 
 [source,bash]
 ----
@@ -635,10 +662,11 @@ NAME      READY     STATUS    RESTARTS   AGE
 vault-0   2/2       Running   0          7m
 vault-1   1/2       Running   0          7m
 ----
+====
 
 Now, one must also _unseal_ the second Vault instance. One should get back to
-the first terminal window — where `kubectl port-forward` is running — and stop
-the running process (using `Ctrl-C`). Then, one should run
+the **_first terminal window_** — where `kubectl port-forward` is running — and
+stop the running process (using `Ctrl-C`). Then, one should run
 
 [source,bash]
 ----
@@ -648,8 +676,8 @@ Forwarding from [::1]:28200 -> 8200
 ----
 <1> Forwards port `8200` of the first Vault pod to the local `28200` port.
 
-Now, one should get back to the second terminal window — where `vault init` and
-`vault unseal` were run — and run the following commands:
+Now one should get back to the **_second terminal window_** — where
+`vault init` and `vault unseal` were run — and run the following commands:
 
 [source,bash]
 ----
@@ -674,15 +702,20 @@ Unseal Nonce:
 <3> At this point one should input another one of the unseal keys.
 <4> At this point one should input yet another one of the unseal keys.
 
-The second Vault pod is now unsealed and ready to serve requests:
+The second Vault pod is now unsealed and ready to serve requests.
+
+[TIP]
+====
+Inspecting pods in the `vault` namespace should now output something similar to
 
 [source,bash]
 ----
 $ kubectl get --namespace vault pod
 NAME      READY     STATUS    RESTARTS   AGE
-vault-0   2/2       Running   0          15m
-vault-1   2/2       Running   0          15m
+vault-0   2/2       Running   0          7m
+vault-1   1/2       Running   0          7m
 ----
+====
 
 [TIP]
 ====
