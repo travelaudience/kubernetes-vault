@@ -358,17 +358,19 @@ If one's output is similar to this it is safe to proceed.
 
 Vault's deployment has to be split in three parts:
 
-* One first creates the Vault `Deployment` itself, which creates a Vault
-  instance that is _unitialized_ and _sealed_. This means it will not accept
-  requests except for the ones required for the initial configuration process.
-* One then proceeds to _initializing_ and _unsealing_ Vault. This will leave
-  Vault in a state in which it can accept requests.
+* One first creates the Vault `StatefulSet` itself, which creates two Vault
+  instances that are _unitialized_ and _sealed_. This means they will not
+  accept any requests except for the ones required for the initial
+  configuration process.
+* One then proceeds to _initializing_ the Vault storage backend and _unsealing_
+  the two Vault instances. This will leave Vault in a state in which it can
+  accept requests.
 * One finally exposes the Vault deployment to outside the Kubernetes cluster
   and secures the deployment.
 
 === Initial deployment
 
-Vault's deployment is composed of six files:
+Vault's deployment is composed of seven files:
 
 [cols="2*"]
 |===
@@ -384,12 +386,15 @@ Vault's deployment is composed of six files:
   file
 ^|`vault-serviceaccount.yaml`
 <|creates a service account for Vault
-^|`vault-deployment.yaml`
-<|describes the deployment of Vault itself.
 ^|`vault-service.yaml`
-<|exposes Vault as a service inside the Kubernetes cluster
-^|`vault-ingress.yaml`
-<|exposes Vault to outside the Kubernetes cluster
+<|exposes Vault as a service inside the Kubernetes cluster (both for API
+  requests and clustering)
+^|`vault-statefulset.yaml`
+<|describes the deployment of Vault itself
+^|`vault-api-service.yaml`
+<|creates a `NodePort` service that exposes the Vault API
+^|`vault-api-ingress.yaml`
+<|exposes the Vault API to outside the Kubernetes cluster
 
 |===
 
@@ -401,9 +406,23 @@ an early stage and to prevent some known issues with `default` service
 accounts.
 ====
 
-In this first part one will be creating the first three resources, leaving the
-service and the ingress resources for later. In order to start the deployment
-one needs to run the following commands:
+[NOTE]
+====
+The **_headless service_** service defined in `vault-service.yaml` supports
+both the `StatefulSet` defined in `vault-statefulset.yaml` as well as
+clustering and high-availability of the Vault deployment.
+====
+
+[NOTE]
+====
+One must create the `vault-api-service.yaml` service to support the ingress
+resource in GCP, since the GCE ingress controller requires a service of type
+`NodePort` to be created.
+====
+
+In this first part one will be creating the first five resources, leaving the
+second service and the ingress resources for later. In order to start the
+deployment one needs to run the following commands:
 
 [source,bash]
 ----
@@ -413,9 +432,12 @@ configmap "vault" created
 
 [source,bash]
 ----
-$ kubectl create -f vault/vault-configmap.yaml
+$ kubectl create -f vault/vault-configmap.yaml // <1>
 configmap "vault" created
 ----
+<1> Before running this command, one should edit `vault-configmap.yaml` and
+replace the value of `redirect_addr` with the address that will be used to
+expose Vault publicly.
 
 [source,bash]
 ----
@@ -425,13 +447,19 @@ serviceaccount "vault" created
 
 [source,bash]
 ----
-$ kubectl create -f vault/vault-deployment.yaml
-deployment "vault" created
+$ kubectl create -f vault/vault-service.yaml
+service "vault" created
 ----
 
-As mentioned above, this creates a Vault instance that is _unitialized_ and
-_sealed_. This means it will not accept requests except for the ones required
-for the initial configuration process.
+[source,bash]
+----
+$ kubectl create -f vault/vault-statefulset.yaml
+statefulset "vault" created
+----
+
+As mentioned above, this will create two Vault instances that are _unitialized_
+and _sealed_. This means that they will not accept requests except for the ones
+required for the initial configuration process.
 
 [TIP]
 ====
@@ -441,35 +469,44 @@ pods in the `vault` namespace. One should wait for a few seconds and run
 [source,bash]
 ----
 $ kubectl get pod --namespace vault
-NAME                     READY     STATUS    RESTARTS   AGE
-vault-3875503644-xxxgs   1/2       Running   0          30s
+NAME      READY     STATUS    RESTARTS   AGE
+vault-0   1/2       Running   0          30s
+vault-1   1/2       Running   0          30s
 ----
 
-If one’s output is similar to this it is safe to proceed, even though the
-number of ready pods is one. This is because Vault hasn't been initialized and
-unsealed yet.
+If one’s output is similar to this it is safe to proceed to the next section,
+**even though the pods are not in the `Ready` state**. This happens because
+Vault hasn't been initialized and unsealed yet.
+====
+
+[TIP]
+====
+Going a bit deeper, the behavior described above happens because a
+`ReadinessProbe` is set on each Vault pod. This probe will only mark a pod as
+`Ready` when these two conditions are satisfied:
+
+* The Vault storage has been **_initialized_**.
+* That particular Vault instance has been **_unsealed_**.
 ====
 
 [TIP]
 ====
 
-If one inspects the logs of the Vault container, one will find the following
+If one inspects the logs of a Vault container, one will find the following
 output:
 
 [source,bash]
 ----
-$ VAULT_POD_NAME=$(kubectl get pod --namespace vault \
-  | grep vault \
-  | awk 'NR==1' \
-  | awk '{print $1}')
 $ kubectl logs --namespace vault --container vault "${VAULT_POD_NAME}"
 ==> Vault server configuration:
 
                      Cgo: disabled
+         Cluster Address: https://vault:8201
               Listener 1: tcp (addr: "0.0.0.0:8200", cluster address: "0.0.0.0:8201", tls: "disabled")
                Log Level: info
                    Mlock: supported: true, enabled: true
-                 Storage: etcd (HA disabled)
+        Redirect Address: https://vault.example.com
+                 Storage: etcd (HA available)
                  Version: Vault v0.8.3
              Version Sha: 6b29fb2b7f70ed538ee2b3c057335d706b6d4e36
 
@@ -484,7 +521,6 @@ $ kubectl logs --namespace vault --container vault "${VAULT_POD_NAME}"
 
 These `INFO` level messages indicate that Vault hasn't been initialized
 yet. Vault will keep repeating these until one takes action.
-
 ====
 
 === Initializing and unsealing Vault
@@ -496,31 +532,25 @@ information that, if leaked, can compromise the security of the data stored by
 Vault.
 ====
 
-Vault must now be initialized and unsealed. As the Vault pod are not accessible
-from outside the cluster at this time, one needs to establish port-forwarding
-to the local machine. To do that, one should run the following in one terminal
-window:
+Vault must now be initialized, and both instances must be unsealed. As the
+Vault pods are not accessible from outside the cluster at this time, one needs
+to establish port-forwarding to one's local workstation. To do that, one should
+run the following in one terminal window:
 
 [source,bash]
 ----
-$ VAULT_POD_NAME=$(kubectl get pod --namespace vault \
-  | grep vault \
-  | awk 'NR==1' \
-  | awk '{print $1}') // <1>
-$ kubectl port-forward --namespace vault "${VAULT_POD_NAME}" 8200:8200 // <2>
-Forwarding from 127.0.0.1:8200 -> 8200
-Forwarding from [::1]:8200 -> 8200
+$ kubectl port-forward --namespace vault vault-0 18200:8200 // <1>
+Forwarding from 127.0.0.1:18200 -> 8200
+Forwarding from [::1]:18200 -> 8200
 ----
-<1> Gets the name of the Vault pod and stores it in the `VAULT_POD_NAME`
-    environment variable.
-<2> Forwards port `8200` of the Vault pod to the local `8200` pod.
+<1> Forwards port `8200` of the first Vault pod to the local `18200` port.
 
 Now, one should leave this command running and open a second terminal window.
 In this new window one should run the following commands:
 
 [source,bash]
 ----
-$ export VAULT_ADDR="http://127.0.0.1:8200" // <1>
+$ export VAULT_ADDR="http://127.0.0.1:18200" // <1>
 $ vault init // <2>
 Unseal Key 1: +G8hVWrVaOnEQquasRyWdE2RAFuCQumodY6YgzfJzGOD // <3>
 Unseal Key 2: XpfepkWVkMWLMJRyranNQDSofE1TjXTJho+ImaozyQ6X // <3>
@@ -538,10 +568,10 @@ Vault does not store the master key. Without at least 3 keys,
 your vault will remain permanently sealed.
 ----
 <1> Sets the value of the `VAULT_ADDR` environment variable to the address
-    where the Vault pod is exposed locally.
+    where the first Vault pod is exposed locally.
 <2> Initializes Vault.
-<3> This instance's _unseal keys_.
-<4> This instance's _initial root token_.
+<3> Vault's _unseal keys_.
+<4> Vault's _initial root token_.
 
 At this point it is of extreme importance to:
 
@@ -596,10 +626,88 @@ Unseal Nonce:
 <1> At this point one should input one of the unseal keys not yet used.
 <2> The Vault instance is _unsealed_.
 
-Vault is now unsealed and ready to serve requests. However, there is one last
-step one should do before proceeding — to _revoke_ the initial root token.
-While this may seem counter-intuitive it is in fact a recommended practice. In
-the same terminal window run:
+The first Vault pod is now unsealed and ready to serve requests:
+
+[source,bash]
+----
+$ kubectl get --namespace vault pod
+NAME      READY     STATUS    RESTARTS   AGE
+vault-0   2/2       Running   0          7m
+vault-1   1/2       Running   0          7m
+----
+
+Now, one must also _unseal_ the second Vault instance. One should get back to
+the first terminal window — where `kubectl port-forward` is running — and stop
+the running process (using `Ctrl-C`). Then, one should run
+
+[source,bash]
+----
+$ kubectl port-forward --namespace vault vault-1 28200:8200 // <1>
+Forwarding from 127.0.0.1:28200 -> 8200
+Forwarding from [::1]:28200 -> 8200
+----
+<1> Forwards port `8200` of the first Vault pod to the local `28200` port.
+
+Now, one should get back to the second terminal window — where `vault init` and
+`vault unseal` were run — and run the following commands:
+
+[source,bash]
+----
+$ export VAULT_ADDR="http://127.0.0.1:28200" // <1>
+$ vault unseal
+Key (will be hidden): // <2>
+(...)
+$ vault unseal
+Key (will be hidden): // <3>
+(...)
+$ vault unseal
+Key (will be hidden): // <4>
+Sealed: false
+Key Shares: 5
+Key Threshold: 3
+Unseal Progress: 0
+Unseal Nonce:
+----
+<1> Sets the value of the `VAULT_ADDR` environment variable to the address
+    where the second Vault pod is exposed locally.
+<2> At this point one should input one of the unseal keys.
+<3> At this point one should input another one of the unseal keys.
+<4> At this point one should input yet another one of the unseal keys.
+
+The second Vault pod is now unsealed and ready to serve requests:
+
+[source,bash]
+----
+$ kubectl get --namespace vault pod
+NAME      READY     STATUS    RESTARTS   AGE
+vault-0   2/2       Running   0          15m
+vault-1   2/2       Running   0          15m
+----
+
+[TIP]
+====
+If one inspects the logs of the `vault-1` pod one will see something similar to
+this:
+
+[source,bash]
+----
+$ kubectl logs --container vault --namespace vault vault-1
+(...)
+2017/09/20 15:17:23.263728 [INFO ] core: vault is unsealed
+2017/09/20 15:17:23.263728 [INFO ] core: entering standby mode
+----
+
+The last log message indicates that this Vault instance will operate as a
+**_standby_**. This means it will accept requests and forward them to the
+cluster leader (which, in this case, is `vault-0`). To learn more about
+clustering and high-availability in Vault one should head over to
+https://www.vaultproject.io/docs/concepts/ha.html[Vault's HA documentation].
+====
+
+There is one last step one should do before proceeding. We need to _revoke_ the
+initial root token. While this may seem counter-intuitive it is in fact a
+recommended practice. In the same terminal window where on ran the last 
+`vault unseal` command one should run:
 
 [source,bash]
 ----
@@ -617,9 +725,9 @@ Success! Token revoked if it existed.
 ----
 <1> This corresponds to the _initial root token_.
 
-Vault is now initialized and unsealed, and the initial root token has been
-revoked. It is now time to continue the deployment by exposing the Vault
-deployment to outside the Kubernetes cluster.
+The Vault deployment is now initialized, both instances are unsealed, and the
+initial root token has been revoked. It is now time to continue the deployment
+by exposing the Vault deployment to outside the Kubernetes cluster.
 
 [TIP]
 ====
@@ -627,18 +735,10 @@ One may now return to the terminal window where `kubectl port-forward` is
 running and terminate the process using Ctrl-C.
 ====
 
-[TIP]
+[IMPORTANT]
 ====
-If one inspects pods in the `vault` namespace one will find that they are now
-marked as _Ready_. This is because the Vault instance is now initialized and
-unsealed.
-
-[source,bash]
-----
-$ kubectl get pod --namespace vault
-NAME                     READY     STATUS    RESTARTS   AGE
-vault-3875503644-xxxgs   2/2       Running   0          4m
-----
+The **_unseal_** procedure must be performed every time a Vault pod crashes or
+restarts for some reason.
 ====
 
 === Exposing Vault
@@ -670,7 +770,7 @@ status: RESERVED
 <2> The name of the IP address one will use to expose Vault.
 
 NOTE: If one creates the IP address with a different name one must update the
-`vault/vault-ingress.yaml` file accordingly.
+`vault/vault-api-ingress.yaml` file accordingly.
 
 After the `vault` IP address is created, one must configure the DNS of the
 domain one is going to use to expose Vault. For instance, if one wants to
@@ -716,7 +816,7 @@ It is highly recommended to wait for changes to propagate before proceeding.
 [IMPORTANT]
 ====
 Before running the following commands one should update the
-`vault/vault-ingress.yaml` file with the actual domain name used to expose
+`vault/vault-api-ingress.yaml` file with the actual domain name used to expose
 Vault.
 ====
 
@@ -725,13 +825,13 @@ resources:
 
 [source,bash]
 ----
-$ kubectl create -f vault/vault-service.yaml
+$ kubectl create -f vault/vault-api-service.yaml
 service "vault" created
 ----
 
 [source,bash]
 ----
-$ kubectl create -f vault/vault-ingress.yaml
+$ kubectl create -f vault/vault-api-ingress.yaml
 ingress "vault" created
 ----
 
@@ -772,7 +872,7 @@ succeeded by following these steps:
 ----
 $ KUBE_LEGO_POD_NAME=$(kubectl get --namespace kube-lego pod \
   | grep kube-lego \
-  | head -n 1 \
+  | awk 'NR==1' \
   | awk '{print $1}')
 ----
 
@@ -792,7 +892,7 @@ time="2017-09-18T12:16:06Z" level=info msg="server listening on http://:8080/" c
 ====
 Let's Encrypt must be able to reach port `80` on domains for which certificates
 are requested, hence the annotation `kubernetes.io/ingress.allow-http`
-in `vault/vault-ingress.yaml` must be set to `"true"`.
+in `vault/vault-api-ingress.yaml` must be set to `"true"`.
 ====
 
 [NOTE]

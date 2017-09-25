@@ -6,7 +6,9 @@ metadata:
     kubernetes.io/ingress.class: gce
     kubernetes.io/ingress.global-static-ip-name: vault
     kubernetes.io/tls-acme: "true"
-  name: vault
+  labels:
+    app: vault
+  name: vault-api
   namespace: vault
 spec:
   rules:
@@ -14,7 +16,7 @@ spec:
       http:
         paths:
           - backend:
-              serviceName: vault
+              serviceName: vault-api
               servicePort: 8080
             path: /*
   tls:
