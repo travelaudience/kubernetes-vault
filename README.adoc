@@ -432,6 +432,13 @@ In this first part one will be creating the first five resources, leaving the
 second service and the ingress resources for later. In order to start the
 deployment one needs to run the following commands:
 
+[IMPORTANT]
+====
+Before running the following commands one should update the
+`vault/vault-configmap.yaml` file with the address where Vault will be made
+publicly accessible (check <<#bookmark-vault-address,below>>).
+====
+
 [source,bash]
 ----
 $ kubectl create -f vault/nginx-configmap.yaml
@@ -440,12 +447,9 @@ configmap "vault" created
 
 [source,bash]
 ----
-$ kubectl create -f vault/vault-configmap.yaml // <1>
+$ kubectl create -f vault/vault-configmap.yaml
 configmap "vault" created
 ----
-<1> Before running this command, one should edit `vault-configmap.yaml` and
-replace the value of `redirect_addr` with the address that will be used to
-expose Vault publicly.
 
 [source,bash]
 ----
@@ -804,6 +808,8 @@ status: RESERVED
 
 NOTE: If one creates the IP address with a different name one must update the
 `vault/vault-api-ingress.yaml` file accordingly.
+
+[[bookmark-vault-address]]
 
 After the `vault` IP address is created, one must configure the DNS of the
 domain one is going to use to expose Vault. For instance, if one wants to
