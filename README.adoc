@@ -936,18 +936,25 @@ time="2017-09-18T12:16:06Z" level=info msg="server listening on http://:8080/" c
 [NOTE]
 ====
 Let's Encrypt must be able to reach port `80` on domains for which certificates
-are requested, hence the annotation `kubernetes.io/ingress.allow-http`
-in `vault/vault-api-ingress.yaml` must be set to `"true"`.
+are requested, so one must use the
+
+[source,yaml]
+----
+kubernetes.io/ingress.allow-http: "true"
+----
+
+annotation in `vault/vault-api-ingress.yaml`. Please note that it is safe to
+set the abovementioned annotation —the Nginx instance that is deployed
+alongside Vault makes sure that Vault only communicates over HTTPS.
+Any request to Vault via plain HTTP will be rejected.
 ====
 
-[NOTE]
+[TIP]
 ====
-It is safe to set the abovementioned annotation to `"true"`—the Nginx instance
-that is deployed alongside Vault makes sure that Vault only communicates over
-HTTPS. Any request to Vault via HTTP will be rejected.
-====
+If everything goes well, after a short while one will be able to access
 
-If everything goes well, after a while one will be able to access
-https://vault.example.com/v1/sys/health securely. On the other hand, if one
-tries to access http://vault.example.com/v1/sys/health one will get an error
-response.
+https://vault.example.com/v1/sys/health
+
+securely. On the other hand, one will not be able to access
+http://vault.example.com/v1/sys/health.
+====
