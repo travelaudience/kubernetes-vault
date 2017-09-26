@@ -178,11 +178,11 @@ $ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace etcd \
 [source,bash]
 ----
 $ kubectl logs --follow --namespace etcd "${ETCD_OPERATOR_POD_NAME}"
-time="2017-09-18T12:04:48Z" level=info msg="etcd-operator Version: 0.5.2"
-time="2017-09-18T12:04:48Z" level=info msg="Git SHA: 0fa2f7d"
-time="2017-09-18T12:04:48Z" level=info msg="Go Version: go1.8.1"
-time="2017-09-18T12:04:48Z" level=info msg="Go OS/Arch: linux/amd64"
-time="2017-09-18T12:04:48Z" level=info msg="Event(v1.ObjectReference{Kind:"Endpoints", Namespace:"etcd", Name:"etcd-operator", UID:"917fe82a-9c69-11e7-90a6-42010a9a00c3", APIVersion:"v1", ResourceVersion:"658", FieldPath:""}): type: 'Normal' reason: 'LeaderElection' etcd-operator-3160827283-2v367 became leader"
+time="2017-09-26T10:48:43Z" level=info msg="etcd-operator Version: 0.6.0"
+time="2017-09-26T10:48:43Z" level=info msg="Git SHA: a04c308"
+time="2017-09-26T10:48:43Z" level=info msg="Go Version: go1.9"
+time="2017-09-26T10:48:43Z" level=info msg="Go OS/Arch: linux/amd64"
+time="2017-09-26T10:48:43Z" level=info msg="Event(v1.ObjectReference{Kind:"Endpoints", Namespace:"etcd", Name:"etcd-operator", UID:"43a0bc38-a2a8-11e7-9f73-42010a9a0fc9", APIVersion:"v1", ResourceVersion:"2111", FieldPath:""}): type: 'Normal' reason: 'LeaderElection' etcd-operator-3796541610-99ptj became leader"
 ----
 
 If the output doesn't differ much from the example, and in particular if one
@@ -279,7 +279,7 @@ new etcd cluster:
 [NOTE]
 ====
 The structure of each secret is discussed in detail in the `etcd-operator`
-https://github.com/coreos/etcd-operator/blob/v0.5.2/doc/user/cluster_tls.md[docs].
+https://github.com/coreos/etcd-operator/blob/v0.6.0/doc/user/cluster_tls.md[docs].
 In order to ease the creation of these secrets when following this document, a
 helper script is provided at `tls/create-etcd-secrets.sh`. Running it will
 create all the necessary secrets in the Kubernetes cluster.
