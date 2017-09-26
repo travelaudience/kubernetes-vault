@@ -1,5 +1,5 @@
 = [Draft] kubernetes-vault
-Vault 0.8.2 on top of Kubernetes (backed by etcd 3.1.10).
+Vault 0.8.3 on top of Kubernetes (backed by etcd 3.1.10).
 :icons: font
 :toc:
 
