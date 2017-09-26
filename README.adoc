@@ -13,6 +13,9 @@ endif::[]
 
 == Pre-Requisites
 
+* A GCP project in which one has the following Google Cloud IAM roles:
+** _Container_ > _Container Engine Admin_
+** _Compute Engine_ > _Compute Engine Admin_
 * A working GKE cluster running Kubernetes v1.7.5 with legacy authorization
   *_disabled_*.
 * A working installation of `gcloud` configured to access the target Google
