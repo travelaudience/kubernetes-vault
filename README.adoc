@@ -507,12 +507,12 @@ Going a bit deeper, the behavior described above happens because a
 [TIP]
 ====
 
-If one inspects the logs of a Vault container, one will find the following
-output:
+If one inspects the logs of a Vault container, say `vault-0`, one will find the
+following output:
 
 [source,bash]
 ----
-$ kubectl logs --namespace vault --container vault "${VAULT_POD_NAME}"
+$ kubectl logs --namespace vault --container vault vault-0
 ==> Vault server configuration:
 
                      Cgo: disabled
