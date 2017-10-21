@@ -47,6 +47,8 @@ function rename_certs {
     | xargs -n 1 cp ca.crt
 }
 
+# Create 'DST_DIR'.
+mkdir -p "${DST_DIR}"
 # Move to "${DST_DIR}".
 pushd "${DST_DIR}" > /dev/null && \
 # Generate the CA.
