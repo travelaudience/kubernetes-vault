@@ -1,5 +1,5 @@
 = kubernetes-vault
-Vault 0.8.3 on top of Kubernetes (backed by etcd 3.1.10).
+Run Hashicorp Vault on top of Kubernetes (GKE). Includes instructions for automated backups (GCS) and day-to-day usage.
 :icons: font
 :toc:
 
@@ -30,18 +30,26 @@ endif::[]
 
 [IMPORTANT]
 ====
+The steps described below are **mandatory**.
+====
+
+[IMPORTANT]
+====
+All commands should be run from the root of this repository.
+====
+
+=== Disable GKE legay authorization mode
+
 Disabling legacy authorization means that _Role-Based Access Control_
 (https://kubernetes.io/docs/admin/authorization/rbac/[RBAC]) is enabled. RBAC
 is the new way to manage permissions in Kubernetes 1.6+. Reading the RBAC
 documentation and understanding the differences between RBAC and legacy
 authorization is strongly encouraged.
-====
 
-[IMPORTANT]
-====
-One must grant themselves the `cluster-admin` role *manually* before
-proceeding. This is due to a known issue with RBAC on GKE. To do that one must
-retrieve their identity using `gcloud` by running
+=== Setup RBAC
+
+Due to a https://cloud.google.com/container-engine/docs/role-based-access-control#defining_permissions_in_a_role[known issue with RBAC on GKE], one must grant themselves the `cluster-admin` role *manually* before
+proceeding. In order to do so, one must retrieve their identity:
 
 [source,bash]
 ----
@@ -50,7 +58,7 @@ $ MY_GCLOUD_USER=$(gcloud info \
   | awk -F'[][]' '{print $2}')
 ----
 
-and then create a `ClusterRoleBinding` by running
+and then create a `ClusterRoleBinding`:
 
 [source,bash]
 ----
@@ -60,36 +68,27 @@ $ kubectl create clusterrolebinding \
   --user=${MY_GCLOUD_USER}
 ----
 
-One must replace `<cluster-role-binding-name>` in the above command with a
+One must replace `<cluster-role-binding-name>` above with a
 unique, meaningful name. It is a good idea to include one's identity in the
 name (e.g., `j.doe-cluster-admin`).
-====
 
 [[bookmark-cfssl]]
-[IMPORTANT]
-====
+=== Install cfssl and cfssljson
+
 `cfssl` can be installed either
 
 * from https://github.com/cloudflare/cfssl[source] — this requires a Go 1.6+
   environment setup on one's workstation; or
-* by downloading the https://pkg.cfssl.org/[binaries] for one's architecture
-  and dropping them on `${PATH}`.
+* by downloading the https://pkg.cfssl.org/[binaries] for one's architecture and dropping them on `${PATH}`.
 
 If downloading the binaries one needs only to download `cfssl` and `cfssljson`.
-====
 
-[IMPORTANT]
-====
-Vault can be installed by downloading the
+=== Install Vault client
+
+Vault client can be installed by downloading the
 https://www.vaultproject.io/downloads.html[binary] for one's architecture and
 dropping it on `${PATH}`. The binary can act both as server and client, and
 will be needed later on to configure the Vault deployment.
-====
-
-[IMPORTANT]
-====
-All commands should be run in a terminal and from the root of the repository.
-====
 
 == Creating the `etcd` and `vault` namespaces
 
@@ -122,8 +121,7 @@ repository accordingly.
 
 `etcd-operator` will be responsible for managing the etcd cluster that Vault
 will use as storage backend. It will handle tasks such as
-<<#bookmark-etcd-vault-periodic-backups,periodic backups>> and member recovery
-in disaster scenarios. `etcd-operator` and the cluster itself will live in the
+<<#bookmark-etcd-vault-periodic-backups,periodic backups>> and disaster recovery.. `etcd-operator` and the cluster itself will live in the
 `etcd` namespace.
 
 To start with, and since RBAC is active on the cluster, one needs to setup
@@ -134,7 +132,7 @@ adequate permissions. To do this one needs to
 * create a `CluserRoleBinding` that grants these permissions to the service
  account.
 
-This is made by running the following commands:
+Below are the commands needed to perform the tasks described above:
 
 [source,bash]
 ----
@@ -162,8 +160,6 @@ $ kubectl create -f ./etcd-operator/etcd-operator-deployment.yaml
 deployment "etcd-operator" created
 ----
 
-[TIP]
-====
 At this point it is a good idea to check whether the deployment succeeded. One
 should wait for a few seconds and then run:
 
@@ -187,35 +183,33 @@ time="2017-09-26T10:48:43Z" level=info msg="Event(v1.ObjectReference{Kind:"Endpo
 
 If the output doesn't differ much from the example, and in particular if one
 doesn't see any error messages, it is safe to proceed.
-====
 
-=== Generating TLS certificates for etcd
+=== Securing etcd cluster
 
 One is now almost ready to create the etcd cluster that will back the Vault
 deployment. However, before proceeding, one needs to generate TLS certificates
-to secure communications with the etcd cluster.
+to secure communications within and to the etcd cluster.
 
 [NOTE]
 ====
-Even though the etcd cluster won't be exposed to outside the Kubernetes
+Even though the etcd cluster won't be exposed to outside of the Kubernetes
 cluster, and even though Vault encrypts all data before it reaches the
-network, it is always a good security measure to enable TLS communication in
-the cluster.
+network, it is highly recommended to adopt additional security measures, such as enabling TLS authentication and communication within the cluster, i.e. cluster membership, and with clients of the cluster.
 ====
 
 One will need different types of certificates for establishing TLS:
 
-* A server certificate which etcd will use for serving _client-to-server_
+* A server certificate which etcd will use for serving client-to-server
  requests (such as a request for a key).
-* A server certificate which etcd will use for serving _server-to-server_
+* A server certificate which etcd will use for serving server-to-server _aka_ peer-to-peer
  requests (such as clustering operations).
-* A client certificate to _authenticate_ requests from `etcd-operator`.
-* A client certificate to _authenticate_ requests from Vault.
+* A client certificate to authenticate requests from `etcd-operator`.
+* A client certificate to authenticate requests from Vault.
 
 One will also need a _Certificate Authority_ (CA) to sign these certificates.
 Since one will be securing communications in cluster-internal domains (such as
 `etcd-0000.etcd-vault.etcd.svc.cluster.local`) one cannot rely on an external
-CA to provide these certificates. That being, one must bootstrap their own CA
+CA to provide these certificates. Therefore, one must bootstrap their own CA
 and use it to sign these certificates.
 
 [NOTE]
@@ -248,12 +242,10 @@ cluster.
 [NOTE]
 ====
 The Certificate Authority generated in this step *_is not_* the same thing as
-the Certificate Authority one is seeking to establish as a result of this
+the Certificate Authority one is seeking to establish as a result of deploying this
 project. Its only purpose is to establish trust in this particular setup of
 etcd and Vault, and it *_must not_* be used for anything else.
 ====
-
-=== Creating Kubernetes secrets for the TLS certificates
 
 As mentioned above, `etcd-operator` has strict requirements regarding the names
 of the certificate files used to establish TLS communications. In particular,
@@ -280,12 +272,12 @@ new etcd cluster:
 ====
 The structure of each secret is discussed in detail in the `etcd-operator`
 https://github.com/coreos/etcd-operator/blob/v0.6.0/doc/user/cluster_tls.md[docs].
-In order to ease the creation of these secrets when following this document, a
+In order to ease the creation of these secrets, a
 helper script is provided at `tls/create-etcd-secrets.sh`. Running it will
 create all the necessary secrets in the Kubernetes cluster.
 ====
 
-To create these secrets in the Kubernetes cluster one must run
+To create the aforementioned secrets, one must run:
 
 [source,bash]
 ----
@@ -296,14 +288,7 @@ secret "etcd-client-tls" created
 secret "vault-etcd-tls" created
 ----
 
-This will also create a `vault-etcd-tls` secret that will be needed later on.
-
-[NOTE]
-====
-`vault-etcd-tls` secret follows the `etcd-operator` conventions for consistency
-and ease of management. In practice it didn't need to follow the same
-conventions.
-====
+The `vault-etcd-tls` secret will be needed later on.
 
 [NOTE]
 ====
@@ -315,7 +300,7 @@ be needed for the remainder of the procedure.
 === Deploying the `etcd-vault` cluster
 
 Now that `etcd-operator` and the necessary Kubernetes secrets are adequately
-setup it is time to create the etcd cluster. To do that, one must run
+setup, it is time to create the etcd cluster. To do that, one must run:
 
 [source,bash]
 ----
@@ -323,35 +308,16 @@ $ kubectl create -f etcd/vault-etcd-etcdcluster.yaml
 etcdcluster "etcd-vault" created
 ----
 
-[NOTE]
-====
-The cluster is created as a
-https://kubernetes.io/docs/concepts/api-extension/custom-resources/[custom resource]
-of type `etcdcluster` rather than as a traditional `Deployment` or `ReplicaSet`
-— it is `etcd-operator` that will take care of "translating" this
-custom resource into a set of pods and services according to the provided
-specification.
-====
+By default ./etcd/vault-etcd-etcdcluster.yaml[the cluster specification] is:
 
-[[bookmark-etcd-vault-periodic-backups]]
-
-[NOTE]
-====
-A few words on the link:./etcd/vault-etcd-etcdcluster.yaml[cluster specification]:
-
-* We are requesting a cluster with *_three nodes_*. This is believed to be
- enough to the project's needs.
-* We are requesting the cluster to be based on *_etcd v3.1.10_*. This is
- because `etcd-operator` doesn't fully support v3.2 yet.
-* We are requesting `etcd-operator` to make backups of our data *_every
- hour_*, and to keep *_at most twelve backups_*. These are stored in a 2GB
+* Cluster name is `etcd-vault`.
+* Use etcd *v3.1.10*, since `etcd-operator` doesn't support v3.2 yet.
+* Have *three nodes*.
+* *Hourly* backups of the data.
+* Keep at most *twelve backups*. These are stored in a 2GB
  https://cloud.google.com/compute/docs/disks/[Persistent Disk].
-* We are requesting for the cluster to be named `etcd-vault`.
-====
 
-[TIP]
-====
-It is now a good idea to check whether the deployment suceeded by inspecting
+Before proceeding any further, one must check whether the etcd cluster deployment suceeded by inspecting
 pods in the `etcd` namespace:
 
 [source,bash]
@@ -479,10 +445,8 @@ As mentioned above, this will create two Vault instances that are
 _uninitialized_ and _sealed_. This means that they will not accept requests
 except for the ones required for the initial configuration process.
 
-[TIP]
-====
-It is now a good idea to check whether the deployment suceeded by inspecting
-pods in the `vault` namespace. One should wait for a few seconds and run
+Before proceeding any further, one must check whether the Vault deployment suceeded by inspecting
+pods in the `vault` namespace:
 
 [source,bash]
 ----
@@ -492,22 +456,12 @@ vault-0   1/2       Running   0          30s
 vault-1   1/2       Running   0          30s
 ----
 
-If one’s output is similar to this it is safe to proceed to the next section,
-*even though the pods are not in the `Ready` state*. This happens because
-Vault hasn't been initialized and unsealed yet.
-====
+If one’s output is similar to this it is safe to proceed.
 
-[TIP]
+[IMPORTANT]
 ====
-Going a bit deeper, the behavior described above happens because a
-`ReadinessProbe` is set on each Vault pod. This probe will only mark a pod as
-`Ready` when these two conditions are satisfied:
-
-* The Vault storage has been *_initialized_*.
-* That particular Vault instance has been *_unsealed_*.
-====
-
-[TIP]
+At this point, Vault is yet to be initialized and unsealed.
+Only after it is, will Kubernetes detect the Vault service is ready to be served.
 ====
 
 If one inspects the logs of a Vault container, say `vault-0`, one will find the
@@ -539,7 +493,6 @@ $ kubectl logs --namespace vault --container vault vault-0
 
 These `INFO` level messages indicate that Vault hasn't been initialized
 yet. Vault will keep repeating these until one takes action.
-====
 
 === Initializing and unsealing Vault
 
@@ -553,7 +506,7 @@ Vault.
 Vault must now be initialized, and both instances must be unsealed. As the
 Vault pods are not accessible from outside the cluster at this time, one needs
 to establish port-forwarding to one's local workstation. To do that, one should
-run the following in one terminal window:
+run the following:
 
 [source,bash]
 ----
@@ -563,19 +516,26 @@ Forwarding from [::1]:18200 -> 8200
 ----
 <1> Forwards port `8200` of the first Vault pod to the local `18200` port.
 
-Now, one should leave this command running and open a second terminal window.
-In this new window one should run the following commands:
+Now, one should leave this command running, open a second terminal window and:
+
+Set the value of the `VAULT_ADDR` environment variable to the address where the first Vault pod is exposed locally.
 
 [source,bash]
 ----
 $ export VAULT_ADDR="http://127.0.0.1:18200" // <1>
-$ vault init // <2>
-Unseal Key 1: +G8hVWrVaOnEQquasRyWdE2RAFuCQumodY6YgzfJzGOD // <3>
-Unseal Key 2: XpfepkWVkMWLMJRyranNQDSofE1TjXTJho+ImaozyQ6X // <3>
-Unseal Key 3: wfFvslot+7s0ainbE40iIhfSk7L6rs+4prc0pjQzvxtJ // <3>
-Unseal Key 4: BhWFOwkg2QTW5DkBfzZWTygWAQ3IA6pMGtUF1i+wUxOr // <3>
-Unseal Key 5: iLGQSSJhBqe65zpkliOATGcCe+7d2L0wn5Nl3KO3PZW9 // <3>
-Initial Root Token: c689c370-22ec-8268-0ea8-4cbb50c2e00c // <4>
+----
+
+Initialize Vault:
+
+[source,bash]
+----
+$ vault init
+Unseal Key 1: +G8hVWrVaOnEQquasRyWdE2RAFuCQumodY6YgzfJzGOD
+Unseal Key 2: XpfepkWVkMWLMJRyranNQDSofE1TjXTJho+ImaozyQ6X
+Unseal Key 3: wfFvslot+7s0ainbE40iIhfSk7L6rs+4prc0pjQzvxtJ
+Unseal Key 4: BhWFOwkg2QTW5DkBfzZWTygWAQ3IA6pMGtUF1i+wUxOr
+Unseal Key 5: iLGQSSJhBqe65zpkliOATGcCe+7d2L0wn5Nl3KO3PZW9
+Initial Root Token: c689c370-22ec-8268-0ea8-4cbb50c2e00c
 
 Vault initialized with 5 keys and a key threshold of 3. Please
 securely distribute the above keys. When the vault is re-sealed,
@@ -585,11 +545,6 @@ to unseal it again.
 Vault does not store the master key. Without at least 3 keys,
 your vault will remain permanently sealed.
 ----
-<1> Sets the value of the `VAULT_ADDR` environment variable to the address
-    where the first Vault pod is exposed locally.
-<2> Initializes Vault.
-<3> Vault's _unseal keys_.
-<4> Vault's _initial root token_.
 
 At this point it is of extreme importance to:
 
@@ -597,51 +552,33 @@ At this point it is of extreme importance to:
 * distribute the unseal keys among trusted individuals, making sure each gets
   only one unseal key.
 
-[TIP]
-====
-Although it may seem old-fashinoned and paranoid, it is a good idea to use
-paper and pen to store the unseal keys, and have each trusted individual store
-them in a safe place like a _safe box_.
-====
+Now that Vault is initialized it is time to unseal it so that it can be used. Per default configuration, one will need to unseal 3 times, each one with one non-repeated unseal key generated above.
 
-[TIP]
-====
-One is now considered a trusted individual and, as such, one can keep one
-unseal key for themself and distribute the remaining four.
-====
-
-Now that Vault is initialized it is time to unseal it so that it can be used.
-In the same terminal window where one ran `vault init` one should run
+Using the same terminal window where one ran `vault init`, one must run:
 
 [source,bash]
 ----
 $ vault unseal
-Key (will be hidden): // <1>
-Sealed: true // <2>
+Key (will be hidden): <1>
+Sealed: true
 Key Shares: 5
-Key Threshold: 3 // <2>
-Unseal Progress: 1 // <2>
+Key Threshold: 3
+Unseal Progress: 1
 Unseal Nonce: 0dfa6cf3-abb9-c5cd-4725-21f89cc2feea
 ----
 <1> At this point one should input one of the unseal keys.
-<2> The Vault instance is _sealed_, and the _key threshold_ is 3. This means
-    that Vault requires the usage of three different unseal keys to complete
-    the unseal process.
-
-One should now repeat this command, using one of the other four unseal keys:
 
 [source,bash]
 ----
 $ vault unseal
-Key (will be hidden): // <1>
-Sealed: true // <2>
+Key (will be hidden): <1>
+Sealed: false
 Key Shares: 5
-Key Threshold: 3 // <2>
-Unseal Progress: 2 // <2>
+Key Threshold: 3
+Unseal Progress: 2
 Unseal Nonce: 0dfa6cf3-abb9-c5cd-4725-21f89cc2feea
 ----
-<1> At this point one should input one of the unseal keys not yet used.
-<2> The Vault instance is still _unsealed_.
+<1> At this point one should input one of the unseal keys not yet used above.
 
 One should now repeat this command again. One will now receive the following
 output:
@@ -649,21 +586,18 @@ output:
 [source,bash]
 ----
 $ vault unseal
-Key (will be hidden): // <1>
-Sealed: false // <2>
+Key (will be hidden): <1>
+Sealed: false
 Key Shares: 5
 Key Threshold: 3
 Unseal Progress: 0
 Unseal Nonce:
 ----
-<1> At this point one should input one of the unseal keys not yet used.
-<2> The Vault instance is _unsealed_.
+<1> At this point one should input one of the unseal keys not yet used above.
 
 The first Vault pod is now unsealed and ready to serve requests.
 
-[TIP]
-====
-Inspecting pods in the `vault` namespace should now output something similar to
+Inspecting pods in the `vault` namespace should now output something similar to:
 
 [source,bash]
 ----
@@ -687,50 +621,22 @@ Forwarding from [::1]:28200 -> 8200
 <1> Forwards port `8200` of the first Vault pod to the local `28200` port.
 
 Now one should get back to the *_second terminal window_* — where
-`vault init` and `vault unseal` were run — and run the following commands:
-
-[source,bash]
-----
-$ export VAULT_ADDR="http://127.0.0.1:28200" // <1>
-$ vault unseal
-Key (will be hidden): // <2>
-(...)
-$ vault unseal
-Key (will be hidden): // <3>
-(...)
-$ vault unseal
-Key (will be hidden): // <4>
-Sealed: false
-Key Shares: 5
-Key Threshold: 3
-Unseal Progress: 0
-Unseal Nonce:
-----
-<1> Sets the value of the `VAULT_ADDR` environment variable to the address
-    where the second Vault pod is exposed locally.
-<2> At this point one should input one of the unseal keys.
-<3> At this point one should input another one of the unseal keys.
-<4> At this point one should input yet another one of the unseal keys.
+`vault init` and `vault unseal` were run before — and repeat the instructions followed to unseal the first Vault pod.
 
 The second Vault pod is now unsealed and ready to serve requests.
 
-[TIP]
+[IMPORTANT]
 ====
-Inspecting pods in the `vault` namespace should now output something similar to
+The second Vault pod will operate as a
+*_standby_* instance. This means it will accept requests and forward them to the
+cluster leader (which, in this case, is `vault-0`). To learn more about
+clustering and high-availability in Vault one should head over to
+https://www.vaultproject.io/docs/concepts/ha.html[Vault's HA documentation].
 
-[source,bash]
-----
-$ kubectl get --namespace vault pod
-NAME      READY     STATUS    RESTARTS   AGE
-vault-0   2/2       Running   0          7m
-vault-1   1/2       Running   0          7m
-----
+However, and for network optimization, Kubernetes will mark _standby_ instances as not ready so that any requests are directed only to the _active_ instance.
 ====
 
-[TIP]
-====
-If one inspects the logs of the `vault-1` pod one will see something similar to
-this:
+If one inspects the logs of the `vault-1` pod one will see something similar to:
 
 [source,bash]
 ----
@@ -740,30 +646,25 @@ $ kubectl logs --container vault --namespace vault vault-1
 2017/09/20 15:17:23.263728 [INFO ] core: entering standby mode
 ----
 
-The last log message indicates that this Vault instance will operate as a
-*_standby_*. This means it will accept requests and forward them to the
-cluster leader (which, in this case, is `vault-0`). To learn more about
-clustering and high-availability in Vault one should head over to
-https://www.vaultproject.io/docs/concepts/ha.html[Vault's HA documentation].
-====
+=== Revoke root token
 
 There is one last step one should do before proceeding. We need to _revoke_ the
 initial root token. While this may seem counter-intuitive it is in fact a
-recommended practice. In the same terminal window where on ran the last 
-`vault unseal` command one should run:
+recommended practice. In the same terminal window where one ran the last
+`vault unseal` command, one should run:
 
 [source,bash]
 ----
-$ vault auth c689c370-22ec-8268-0ea8-4cbb50c2e00c // <1>
+$ vault auth <1>
 Successfully authenticated! You are now logged in.
-token: c689c370-22ec-8268-0ea8-4cbb50c2e00c // <1>
+token: <1>
 token_duration: 0
 token_policies: [root]
 ----
 
 [source,bash]
 ----
-$ vault token-revoke c689c370-22ec-8268-0ea8-4cbb50c2e00c // <1>
+$ vault token-revoke <1>
 Success! Token revoked if it existed.
 ----
 <1> This corresponds to the _initial root token_.
@@ -780,8 +681,7 @@ running and terminate the process using Ctrl-C.
 
 [IMPORTANT]
 ====
-The *_unseal_* procedure must be performed every time a Vault pod crashes or
-restarts for some reason.
+The *_unseal_* procedure must be performed to every new Vault pod, i.e. when a pod crashes or is restarted.
 ====
 
 === Exposing Vault
@@ -799,21 +699,23 @@ Created [https://www.googleapis.com/compute/v1/projects/<project-name>/global/ad
 [source,bash]
 ----
 $ gcloud compute addresses describe vault --global
-address: 35.201.114.242 // <1>
+address: <1>
 creationTimestamp: '2017-09-18T05:12:33.928-07:00'
 description: ''
 id: '7579662126224115422'
 ipVersion: IPV4
 kind: compute#address
-name: vault // <2>
+name: vault
 selfLink: https://www.googleapis.com/compute/v1/projects/<project-name>/global/addresses/vault
 status: RESERVED
 ----
 <1> The IP address one will use to expose Vault.
-<2> The name of the IP address one will use to expose Vault.
 
-NOTE: If one creates the IP address with a different name one must update the
+[IMPORTANT]
+====
+If one creates the IP address with a different name one must update the
 `vault/vault-api-ingress.yaml` file accordingly.
+====
 
 [[bookmark-vault-address]]
 
@@ -824,15 +726,13 @@ type `A` and name `vault` pointing to the abovementioned IP address at the DNS
 provider for the `example.com` domain. The steps to do this are highly
 dependent on the DNS provider for the domain and cannot be detailed here.
 
-[IMPORTANT]
-====
-From this point it is assumed that DNS has been properly configured
+From this point on, it is assumed that DNS has been properly configured
 and that changes have propagated. One can test whether changes have propagated
 by using `dig`:
 
 [source,bash]
 ----
-dig @8.8.8.8 vault.example.com A // <1>
+dig @8.8.8.8 vault.example.com A
 
 ; <<>> DiG 9.8.3-P1 <<>> @8.8.8.8 vault.example.com A
 ; (1 server found)
@@ -845,7 +745,7 @@ dig @8.8.8.8 vault.example.com A // <1>
 ;vault.example.com.		IN	A
 
 ;; ANSWER SECTION:
-vault.example.com.	299	IN	A	35.201.114.242 // <2>
+vault.example.com.	299	IN	A	<2>
 
 ;; Query time: 61 msec
 ;; SERVER: 8.8.8.8#53(8.8.8.8)
@@ -855,17 +755,19 @@ vault.example.com.	299	IN	A	35.201.114.242 // <2>
 <1> Looks-up `A` records for `vault.example.com` at Google Public DNS (`8.8.8.8`).
 <2> This must match the global IP address created above.
 
+[IMPORTANT]
+====
 It is highly recommended to wait for changes to propagate before proceeding.
 ====
 
 [IMPORTANT]
 ====
-Before running the following commands one should update the
+Before running the following commands, one should update the
 `vault/vault-api-ingress.yaml` file with the actual domain name used to expose
 Vault.
 ====
 
-Once the `vault` IP address is created one must create the service and ingress
+Once the `vault` IP address is created, one must create the service and ingress
 resources:
 
 [source,bash]
@@ -880,12 +782,9 @@ $ kubectl create -f vault/vault-api-ingress.yaml
 ingress "vault" created
 ----
 
-[NOTE]
-====
-This will create a
+The above will create a
 https://cloud.google.com/compute/docs/load-balancing/[_global *external* load-balancer_]
 pointing to the Vault deployment.
-====
 
 In order to secure Vault external access one must now configure HTTPS access.
 The easiest and cheapest way to obtain a trusted TLS certicate is using
@@ -896,7 +795,7 @@ https://github.com/jetstack/kube-lego[`kube-lego`]:
 [IMPORTANT]
 ====
 Before running the following commands one should update the
-`kube-lego/kube-lego.yaml` file with one's actual email address.
+`kube-lego/kube-lego.yaml` file with one's information, i.e. email.
 ====
 
 [source,bash]
@@ -907,11 +806,9 @@ configmap "kube-lego" created
 deployment "kube-lego" created
 ----
 
-[TIP]
-====
 As soon as it starts, `kube-lego` will start monitoring ingress resources and
 requesting certificates from Let's Encrypt. One can check that the deployment
-succeeded by following these steps:
+succeeded by running the following:
 
 [source,bash]
 ----
@@ -931,11 +828,9 @@ time="2017-09-18T12:16:06Z" level=info msg="server listening on http://:8080/" c
 (...)
 ----
 
+[IMPORTANT]
 ====
-
-[NOTE]
-====
-Let's Encrypt must be able to reach port `80` on domains for which certificates
+Let's Encrypt must be able to reach port `TCP 80` on domains for which certificates
 are requested, so one must use the
 
 [source,yaml]
@@ -944,17 +839,14 @@ kubernetes.io/ingress.allow-http: "true"
 ----
 
 annotation in `vault/vault-api-ingress.yaml`. Please note that it is safe to
-set the abovementioned annotation —the Nginx instance that is deployed
+set the abovementioned annotation, since the NGINX instance that is deployed
 alongside Vault makes sure that Vault only communicates over HTTPS.
 Any request to Vault via plain HTTP will be rejected.
 ====
 
-[TIP]
-====
 If everything goes well, after a short while one will be able to access
 
 https://vault.example.com/v1/sys/health
 
 securely. On the other hand, one will not be able to access
 http://vault.example.com/v1/sys/health.
-====
