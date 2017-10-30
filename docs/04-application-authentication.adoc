@@ -14,12 +14,15 @@ endif::[]
 == Abstract
 
 This document describes the setup of two authentication processes for
-applications running in Google Container Engine (GKE). The first process is
+applications running in Google Container Engine (GKE).
+
+The first process is
 based on the Google Cloud IAM API and works on every version of GKE. It is
-suitable for usage in applications running in old versions of GKE. The second
-process is based on the `TokenReview` API of Kubernetes and works on GKE
+suitable for usage in applications running in old versions of GKE.
+
+The second process is based on the `TokenReview` API of Kubernetes and works on GKE
 clusters running Kubernetes 1.7.8 and higher. It is the recommended approach for
-new clusters and for clusters that can be upgraded.
+new clusters.
 
 [#img-architecture]
 .Applications in different clusters and projects communicating with Vault.
@@ -30,8 +33,8 @@ and projects to access Vault, providing an effective inter-cluster,
 inter-project solution.
 
 For the remainder of the document it is assumed that
-Vault 0.8.3 is running in GKE and that it is publicly accessible at
-`https://vault.example.com` as described in `README.adoc`.
+Vault 0.8.3 is running on GKE and that it is publicly accessible at
+`https://vault.example.com`.
 
 == Pre-Requisites
 
@@ -40,7 +43,7 @@ Vault 0.8.3 is running in GKE and that it is publicly accessible at
 * Being authenticated as `root` in Vault.
 * A set of policies pre-configured in Vault.
 
-One is also expected to be familiar with Vault and with the Vault documentation,
+One is also expected to be familiar with the Vault documentation,
 in particular with
 
 * the
@@ -138,24 +141,20 @@ the project where Vault is deployed. In order to create the account one must run
 [source,bash]
 ----
 $ gcloud iam service-accounts create \
->    vault-authn \ // <1>
->    --display-name "Vault AuthN" \ // <2>
->    --project <project-id> // <3>
+>    vault-authn \
+>    --display-name "Vault AuthN" \
+>    --project <project-id>
 Created service account [vault-authn].
 $ gcloud iam service-accounts keys create \
->    vault-authn.json \ // <4>
->    --iam-account vault-authn@<project-id>.iam.gserviceaccount.com \ //<3><5>
+>    vault-authn.json \
+>    --iam-account vault-authn@<project-id>.iam.gserviceaccount.com \
 >    --key-file-type json
 created key [xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] of type [json] as [vault-authn.json] for [vault-authn@<project-id>.iam.gserviceaccount.com]
 ----
-<1> One may choose a different name for the service account.
-<2> One may choose a different display name for the service account.
-<3> One must replace `<project-id>` with the ID of the project where Vault
-    is deployed.
-<4> One may choose a different filename or path for the service account's
-    private key.
-<5> If one has choosen a different name for the service account one must change
-    it here.
+<1> One may choose a different name for the service account, other than `vault-authn`.
+<2> One may choose a different display name for the service account, other than `Vault AuthN`.
+<3> One must replace `<project-id>` with the ID of the project where Vault is deployed.
+<4> One may choose a different filename or path for the service account's private key, other than `vault-authn.json`.
 
 [IMPORTANT]
 ====
@@ -163,8 +162,9 @@ This service account must be granted the following IAM roles *_on each project h
 
 * _Service Accounts_ → _Service Account Key Admin_
 * _Service Accounts_ → _Service Account Token Creator_
+====
 
-One can grant these roles via the Google Cloud Platform Console by navigating to
+One can grant the needed roles via the Google Cloud Platform Console by navigating to
 
 _IAM & admin_ → _IAM_ → _Add_
 
@@ -172,15 +172,15 @@ or by running
 
 [source,bash]
 ----
-$ gcloud projects add-iam-policy-binding <client-project-id> \ // <1>
+$ gcloud projects add-iam-policy-binding <client-project-id> \
 >    --member \
->    serviceAccount:vault-authn@<project-id>.iam.gserviceaccount.com \ // <2><3>
+>    serviceAccount:vault-authn@<project-id>.iam.gserviceaccount.com \
 >    --role \
 >    roles/iam.serviceAccountKeyAdmin
 bindings: (...)
-$ gcloud projects add-iam-policy-binding <client-project-id> \ // <1>
+$ gcloud projects add-iam-policy-binding <client-project-id> \
 >    --member \
->    serviceAccount:vault-authn@<project-id>.iam.gserviceaccount.com \ // <2><3>
+>    serviceAccount:vault-authn@<project-id>.iam.gserviceaccount.com \
 >    --role \
 >    roles/iam.serviceAccountTokenCreator
 bindings: (...)
@@ -191,7 +191,6 @@ bindings: (...)
     is deployed.
 <3> If one has choosen a different name for the service account one must change
     it here.
-====
 
 === Enabling Vault's `gcp` Authentication Backend
 
@@ -208,7 +207,7 @@ private key of the service account used to validate signed tokens:
 
 [source,bash]
 ----
-$ vault write auth/gcp/config credentials=@vault-authn.json // <1>
+$ vault write auth/gcp/config credentials=@vault-authn.json
 Success! Data written to: auth/gcp/config
 ----
 <1> If one has chosen a different filename or path for the service account's
@@ -220,12 +219,12 @@ In order to create roles one must run:
 
 [source,bash]
 ----
-$ vault write auth/gcp/role/<role-name> \ // <1>
+$ vault write auth/gcp/role/<role-name> \
 >    type="iam" \
->    project_id="<client-project-id>" \ // <2>
->    bound_service_accounts="..." \ // <3>
->    policies="..." \ // <4>
->    period="<ttl>" // <5>
+>    project_id="<client-project-id>" \
+>    bound_service_accounts="..." \
+>    policies="..." \
+>    period="<ttl>"
 Success! Data written to: auth/gcp/role/<role-name>
 ----
 <1> One must replace `<role-name>` by the actual role name.
@@ -277,7 +276,7 @@ To enable the `kubernetes` authentication backend one must run:
 
 [source,bash]
 ----
-$ vault auth-enable --path "<client-project-id>-<cluster-name>" kubernetes // <1><2>
+$ vault auth-enable --path "<client-project-id>-<cluster-name>" kubernetes
 Successfully enabled 'gcp' at '<client-project-id>-<cluster-name>'!
 ----
 <1> One must replace `<client-project-id>` with the ID of the project where the
@@ -291,26 +290,19 @@ Every Kubernetes cluster that requires access to Vault needs its own instance of
 the `kubernetes` authentication backend.
 ====
 
-[TIP]
-====
-One may choose a naming rule for paths other than
-`<client-project-id>-<cluster-name>`, although this naming scheme is believed to
-be the most intuitive.
-====
-
 Finally, one must configure the `kubernetes` auth backend by providing it with
 the URL of the Kubernetes API and with the CA certificate for the cluster:
 
 [source,bash]
 ----
 $ KUBERNETES_HOST=$(gcloud container clusters describe \
->    <cluster-name> \ // <1>
+>    <cluster-name> \
 >    --format json \
->    --project <client-project-id> | jq -r .endpoint) // <2>
+>    --project <client-project-id> | jq -r .endpoint)
 $ KUBERNETES_CA_CERT=$(gcloud container clusters describe \
->    <cluster-name> \ // <1>
+>    <cluster-name> \
 >    --format json \
->    --project <client-project-id>| jq -r .masterAuth.clusterCaCertificate) // <2>
+>    --project <client-project-id>| jq -r .masterAuth.clusterCaCertificate)
 $ vault write auth/<client-project-id>-<cluster-name>/config \
 >    kubernetes_host="https://${MASTER_IP}" \
 >    kubernetes_ca_cert="${KUBERNETES_CA_CERT}"
@@ -327,11 +319,11 @@ In order to create roles one must run:
 
 [source,bash]
 ----
-$ vault write auth/<client-project-id>-<cluster-name>/role/<role-name> \ // <1><2><3>
->    bound_service_account_names="..." \ // <4>
->    bound_service_account_namespaces="..." \ // <5>
->    policies="..." \ // <6>
->    period="<ttl>" // <7>
+$ vault write auth/<client-project-id>-<cluster-name>/role/<role-name> \
+>    bound_service_account_names="..." \
+>    bound_service_account_namespaces="..." \
+>    policies="..." \
+>    period="<ttl>"
 Success! Data written to: auth/<client-project-id>-<cluster-name>/role/<role-name>
 ----
 <1> One must replace `<client-project-id>` with the ID of the project where the
@@ -389,10 +381,10 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: system:auth-delegator
-subjects: // <1>
+subjects:
 - kind: ServiceAccount
-  name: <service-account-name> // <2>
-  namespace: <namespace> // <3>
+  name: <service-account-name>
+  namespace: <namespace>
 ----
 <1> The binding can have as many subjects as necessary.
 <2> One must replace `<service-account-name>` with the name of a service
