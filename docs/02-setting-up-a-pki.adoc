@@ -1,0 +1,479 @@
+= Setting Up a Public-Key Infrastructure
+:icons: font
+:imagesdir: ./img/
+:toc:
+
+ifdef::env-github[]
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
+== Abstract
+
+This document describes the steps necessary to setup a PKI (_public-key
+infrastructure_). This PKI may be used to generate certificates used for trusted
+TLS communication in internal domains (e.g.,
+`example.default.svc.cluster.local`) as well as for mutual TLS authentication.
+
+== Pre-Requisites
+
+* The `vault` binary.
+* Being authenticated as `root` in Vault.
+* The `openssl` binary (optional).
+
+== Creating a Root Certificate Authority
+
+One first needs to create a _root certificate authority_. This will be the basis
+of the public-key infrastructure being established and will be used to create
+_intermediate certificate authorities_ that will, in turn, sign the certificates
+one needs for TLS.
+
+In order to create a root certificate authority one needs to run:
+
+[source,bash]
+----
+$ vault mount -path root-ca pki # <1>
+Successfully mounted 'pki' at 'root-ca'!
+
+$ vault mount-tune -max-lease-ttl 87600h root-ca # <2>
+Successfully tuned mount 'root-ca'!
+
+$ vault write \ # <3>
+>    -field=certificate \ # <4>
+>    root-ca/root/generate/internal \ # <5>
+>    common_name="Example Ltd. Root CA" \ # <6>
+>    ttl="87600h" > root-ca.crt # <7><8>
+
+$ vault write \ # <9>
+>    pki/config/urls \
+>    issuing_certificates="https://vault.example.com/v1/root-ca/ca" \ <10>
+>    crl_distribution_points="https://vault.example.com/v1/root-ca/crl" <11>
+Success! Data written to: root-ca/config/urls
+----
+<1> Mount an instance of Vault's `pki` backend at `root-ca`.
+<2> Tune the `root-ca` backend so that the maximum TTL of issued certificates is
+    10 years.
+<3> This command generates the root certificate authority's certificate and
+    private key.
+<4> Output only the `certificate` field, corresponding to the root certificate
+    authority's certificate.
+<5> `internal` instructs Vault not to output the root certificate authority's
+    private key. This key will be safely stored and managed by Vault.
+<6> One must replace `Example Ltd. Root CA` with the name of the root
+    certificate authority.
+<7> Request a TTL of 10 years for the root certificate authority's certificate.
+<8> Dump the command's output into `root-ca.crt`. This file will be needed later
+    in the process.
+<9> This command sets the URLs for the `Issuing Certificate` and `CRL
+    Distribution Points` fields.
+<10> The URL from where the root certificate authority's certificate can be
+     obtained. One must replace `vault.example.com` with the URL where Vault is
+     publicly accessible.
+<11> The URL from where the certificate revogation list can be obtained. One
+     must replace `vault.example.com` with the URL where Vault is publicly
+     accessible.
+
+== Creating an Intermediate Certificate Authority
+
+It is a common security practice to have certificates signed by an shorter-lived
+certificate authority—called an _intermediate certificate authority_—instead of
+the root certificate authority. The intermediate certificate authority's
+certificate is signed by the root certificate authority in order to establish a
+_chain-of-trust_.
+
+[TIP]
+====
+There may be any number of intermediate certificate authorities in a public-key
+infrastructure. However, it is usual and simpler to deal with a single one at a
+time.
+====
+
+To create an intermediate certificate authority one must first mount a second
+instance of Vault's `pki` backend and create a _certificate signing request_:
+
+[source,bash]
+----
+$ vault mount -path=intermediate-ca pki # <1>
+Successfully mounted 'pki' at 'intermediate-ca'!
+
+$ vault mount-tune -max-lease-ttl 8760h intermediate-ca # <2>
+Successfully tuned mount 'intermediate-ca'!
+
+$ vault write \ # <3>
+>    -field=csr \ # <4>
+>    intermediate-ca/intermediate/generate/internal \ # <5>
+>    common_name="Example Ltd. Intermediate CA" > intermediate-ca.csr # <6><7>
+----
+<1> Mount an instance of Vault's `pki` backend at `intermediate-ca`. One may
+    choose a different path if establishing multiple intermediate certificate
+    authorities.
+<2> Tune the `intermediate-ca` backend so that the maximum TTL of issued
+    certificates is 1 year.
+<3> This command generates the certificate signing requests for our intermediate
+    certificate authority.
+<4> Output only the `csr` field, corresponding to the certificate signing
+    request.
+<5> `internal` instructs Vault not to output the intermediate certificate
+    authority's private key. This key will be safely stored and managed by
+    Vault.
+<6> One must replace `Example Ltd. Intermediate CA` with the name of the
+    intermediate certificate authority.
+<7> Request a TTL of 10 years for the intermediate certificate authority's
+    certificate.
+
+One must now use the root certificate authority to sign `intermediate-ca.csr`:
+
+[source,bash]
+----
+$ vault write \ # <1>
+>    -field=certificate \ # <2>
+>    root-ca/root/sign-intermediate \
+>    csr=@intermediate-ca.csr ttl="8760h" > intermediate-ca.crt # <3><4>
+----
+<1> This command signs the specified certificate signing request, returning a
+    signed certificate.
+<2> Output only the `certificate` field, corresponding to the signed
+    intermediate certificate authority's certificate.
+<3> Upload the `intermediate-ca.csr` file generated in the previous step, and
+    request a TTL of 1 year for the intermediate certificate authority.
+<4> Dump the command's output into `intermediate-ca.crt`. One will need to
+    upload this file in the next step.
+
+As a final step to generating the intermediate certificate authority one must
+uploaded the signed certificate chain to the `intermediate-ca` mount:
+
+[source,bash]
+----
+$ cat intermediate-ca.crt <(echo) root-ca.crt > intermediate-chain.crt # <1>
+
+$ vault write \ # <2>
+>    intermediate-ca/intermediate/set-signed \
+>    certificate=@intermediate-chain.crt <3>
+----
+<1> Concatenate the intermediate and the root certificate authorities'
+    certificates into a _certificate authority chain_.
+<2> This command uploads the signed certificate to the `intermediate-ca` mount.
+<3> Upload the certificate authority chain.
+
+[IMPORTANT]
+====
+It is important to upload the full certificate authority chain and not only the
+intermediate certificate authority's certificate. Vault will return the value
+set in this step to applications requesting certificates, and applications will
+often need the full certificate chain.
+====
+
+== Creating Roles
+
+Certificates will be issued by the intermediate certificate authority based on
+pre-configured *_roles_* — sets of rules which determine what kind of
+certificates applications can request. Applications request certificates from
+roles they have permissions to access.
+
+An example role that allows for generating certificates for any subdomain of
+`default.svc.cluster.local` can be created by running
+
+[source,bash]
+----
+$ vault write \ # <1>
+>    intermediate-ca/roles/kubernetes-default \ # <2>
+>    allowed_domains="default.svc.cluster.local" \ # <3>
+>    allow_subdomains="true" \ # <4>
+>    max_ttl="8760h" # <5>
+----
+<1> This command creates a new role inside the `intermediate-ca` mount.
+<2> The name of the role is `kubernetes-default`.
+<3> The role allows for requesting certificates for the
+    `default.svc.cluster.local` domain.
+<4> The role allows for requesting certificates for subdomains (e.g.,
+    `my-service.default.svc.cluster.local`).
+<5> Certificates issued by this role will have a maximum TTL of 1 year.
+
+An example of a more permissive role that allows for generating certificates for
+any service in a Kubernetes cluster can be created by running
+
+[source,bash]
+----
+$ vault write \ # <1>
+>    intermediate-ca/roles/kubernetes-all \ # <2>
+>    allowed_domains="*.svc.cluster.local" \ # <3>
+>    allow_glob_domains="true" \ # <3>
+>    allow_subdomains="true" \ # <4>
+>    max_ttl="8760h" # <5>
+----
+<1> This command creates a new role inside the `intermediate-ca` mount.
+<2> The name of the role is `kubernetes-all`.
+<3> The role allows for requesting certificates for any domain matching
+    `{empty}*.svc.cluster.local`
+<4> The role allows for requesting certificates for subdomains (e.g.,
+    `my-service.my-namespace.svc.cluster.local`).
+<5> Certificates issued by this role will have a maximum TTL of 1 year.
+
+[IMPORTANT]
+====
+For a full list of options accepted by Vault when creating a role one should
+check
+https://www.vaultproject.io/api/secret/pki/index.html#create-update-role[the Vault docs].
+However, one must keep in mind that some options are dangerous if used
+incorrectly and may compromise the security of the PKI solution being
+established.
+====
+
+== Requesting Certificates
+
+Once a role is created one may request a certificate:
+
+[source,bash]
+----
+$ vault write \ # <1>
+>    intermediate-ca/issue/kubernetes-all \ # <1>
+>    common_name="vault-tests.vault.svc.cluster.local" \ # <2>
+>    ttl="2160h" # <3>
+----
+<1> This command issues a certificate based on the `kubernetes-all` role.
+<2> The common name (`CN`) requested for the certificate is
+    `vault-tests.vault.svc.cluster.local`.
+<3> The TTL being requested for the certificate is 3 months.
+
+The output of the command includes the generated certificate, the generated
+private key, the certificate of the issuing certificate authority
+(`intermediate-ca`) and the certificate chain uploaded previously:
+
+[source,bash]
+----
+Key             	Value
+---             	-----
+ca_chain        	[-----BEGIN CERTIFICATE-----
+MIID5DCCAsygAwIBAgIUaLoU/b1J7uGlnkW59k424mSDtDYwDQYJKoZIhvcNAQEL
+BQAwHzEdMBsGA1UEAxMURXhhbXBsZSBMdGQuIFJvb3QgQ0EwHhcNMTcxMDI2MTYy
+MjAwWhcNMTgxMDI2MTYyMjMwWjAnMSUwIwYDVQQDExxFeGFtcGxlIEx0ZC4gSW50
+ZXJtZWRpYXRlIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0hUt
+uq3kb89Tok2abOXP0h1yuocwDv94nZyd6tKUZyJyV6pBNa2/ng0IVzM78Grm2MDw
+c8riz9288i4T2tFEef7MU4/Qg1xdDrnLLmq/eUPOY/nA2eGZKrtqL6YmpMzfxyGZ
+Ny8M2AKJzQ8ZDjJm14u17qx9tM365pCvvLODXBRszPKm+wXCIVmDXnoxLblorVrG
+1/Y2dA5iLrh2sxDw5RRu2pyUERMrBgHtaZEuTecEShDC/+avsKJAYpBTxi4d58lw
+aA327hKZpQyy6R6jguk/JQWWDt8ha4iFf3peukk7ZMt1sG+xwV9OgRlnfSZbCBKL
+PAGaslXfFdCpkkeOUQIDAQABo4IBDjCCAQowDgYDVR0PAQH/BAQDAgEGMA8GA1Ud
+EwEB/wQFMAMBAf8wHQYDVR0OBBYEFKpxKAi7zcO8b89zP4Mq/znm8f3bMB8GA1Ud
+IwQYMBaAFDpoacE/F/1uQL26yaLh/hG6uR10MEMGCCsGAQUFBwEBBDcwNTAzBggr
+BgEFBQcwAoYnaHR0cHM6Ly92YXVsdC5leGFtcGxlLmNvbS92MS9yb290LWNhL2Nh
+MCcGA1UdEQQgMB6CHEV4YW1wbGUgTHRkLiBJbnRlcm1lZGlhdGUgQ0EwOQYDVR0f
+BDIwMDAuoCygKoYoaHR0cHM6Ly92YXVsdC5leGFtcGxlLmNvbS92MS9yb290LWNh
+L2NybDANBgkqhkiG9w0BAQsFAAOCAQEALlCin+t75+DMVQLsbVZlgjLCc30MZ1SP
+fyRDRUvop8IHNQbkS1ufH8A9atoVFbVBpptXzbrCBNaJ2gpL0i+ChXkESFkhkC7V
+NoSovrqVwdLPsXTS3gKNe+sGqvotl5lCdwIxVOwY8UmkWxfJWCFw9Ps9MxF+UAHX
+G0DApjgVG+no83WEuuTr4fquam/eaQ0BP04fcxQV4yRa+MtX4c2o6ocoNdiRaKcS
+ECDoJFyaZgCPgh9S5V3rQaOwm7x3y9tiO/VrpJCOtFZx3vAoYAFTA+fBM3Os/xLt
+RI84PLc7rqKDEPB4Ho0CfO41TPUnUhSefD6F/TlygdprdCy2hW114g==
+-----END CERTIFICATE----- -----BEGIN CERTIFICATE-----
+MIIDUjCCAjqgAwIBAgIUE7uPErsPwjc22km53OXfpiMrlZQwDQYJKoZIhvcNAQEL
+BQAwHzEdMBsGA1UEAxMURXhhbXBsZSBMdGQuIFJvb3QgQ0EwHhcNMTcxMDI2MTYx
+NjU4WhcNMjcxMDI0MTYxNzI3WjAfMR0wGwYDVQQDExRFeGFtcGxlIEx0ZC4gUm9v
+dCBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALnbrm+RgfigwfoR
+4+QO3BEW5DBdRaX5EbR7hlFm2NvO1HsEOMyl0Vlx/xStT8Gu0HsaGJNxEj/9Rgk+
+UJVYTGatNsM2+ZsJmrSI6f/6AYjAy+iwXaQGiDyDE8e1IR1+b+xwRCMvlW9xu1qs
+eaO+Olj1TEj8I4C+rphi4KrMorrYUJQi1picMSK6Lq940DxDJnhtmct9nzCUtjFB
+NOMDdofivhc4HpgDecEo3DYUGQb1/bbMWuKVZg2mQ2RY05H+TIRQJAFugJMdENpa
+SsT/68ocucPDa/SFBA3YRBjr2W+E48WWZQTbVHx6MpwXWDkzTGg9jstgQ07OrSu1
+G/MXfqUCAwEAAaOBhTCBgjAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB
+/zAdBgNVHQ4EFgQUOmhpwT8X/W5AvbrJouH+Ebq5HXQwHwYDVR0jBBgwFoAUOmhp
+wT8X/W5AvbrJouH+Ebq5HXQwHwYDVR0RBBgwFoIURXhhbXBsZSBMdGQuIFJvb3Qg
+Q0EwDQYJKoZIhvcNAQELBQADggEBADonU1LIEq2XNKPPaEND5YCZ84mPjfpJLrtu
+ggENhL2Ec3nd3CLRuryzGOuivWPRhTefgGi/l2JWpKhYNNz4o1N/VzEKgt4kI7hN
+7WWQxokt9vrshVHPKtLHyU7lL9t83hNyYhUlqaE85hGCjFQpklhB5L0kZy12mep7
+ygV7dePxkw+X221EvNTX1Kk43zJnzFhpTSxKkfxxubV29SQfySWAgWwMcllLZqGk
+hRSEmC/DxjdU4rPMX5zq3RWlLVLN/5/DR7vWVsh3KJ83qvgXPKVnV1fnrMx5p0RM
+5ISa2zO/M5ZiJLH2PgyDIVupH8wThRw+JMSwxejkobqSLRAYRJc=
+-----END CERTIFICATE-----]
+certificate     	-----BEGIN CERTIFICATE-----
+MIIDhjCCAm6gAwIBAgIUK+MvX4cYlFCBoZZqjrUZJjnhi8AwDQYJKoZIhvcNAQEL
+BQAwJzElMCMGA1UEAxMcRXhhbXBsZSBMdGQuIEludGVybWVkaWF0ZSBDQTAeFw0x
+NzEwMjcwODIzMThaFw0xODAxMjUwODIzNDhaMC4xLDAqBgNVBAMTI3ZhdWx0LXRl
+c3RzLnZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsMIIBIjANBgkqhkiG9w0BAQEFAAOC
+AQ8AMIIBCgKCAQEAmVrjkZ3MBRTXX3QU5tXLf51uTZmyQEayWd4IULRqA7zXmzPA
+to1fhI4cvLTGU2blFZoLuwyA8RlpbrtkhD/1s68mEn+eHo8DDWrMXPTRabBLAg28
+lwqEsgys71n5fPaHHMote5VodTsZE+O2/28Nm6jIX8/ca7/L31/jlBkW418twfIo
+x7JVcN4GPNfZhFwG/s0axk3CLLTe8lmpIFnVz+imSdKSCX6ibJ9GIxmHrdn5RCVH
+WOoCDVVKIkcVAk8hRY1dgTBg86yFNygiO/MHT9rJY9i54PXSqFMaNZaRD+psZ+0I
+9hhTA07Z3OhqXH1iAN3rbDV350xXetVsGiHGuQIDAQABo4GiMIGfMA4GA1UdDwEB
+/wQEAwIDqDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwHQYDVR0OBBYE
+FHEu3vGSptnbT6O/9w+tOShxaBWzMB8GA1UdIwQYMBaAFKpxKAi7zcO8b89zP4Mq
+/znm8f3bMC4GA1UdEQQnMCWCI3ZhdWx0LXRlc3RzLnZhdWx0LnN2Yy5jbHVzdGVy
+LmxvY2FsMA0GCSqGSIb3DQEBCwUAA4IBAQAqJmA9hOXrpK6QU8spnckcr/B13YQp
+cV+HemxWuRmrXvV0bSlq47xiJMk8EmEI843mZuZDrveqbdEYl/8X26xCBfZCcJCd
+n7ATs8fsoeY87QduPOlozf3VKITH5f7CcpKboKEt6i33Gwhky+bFMYhlt977nb5l
+i7ukFM6HwBHWYneB5jb4CRhojKMcDAAgBZgVP7kf/hdKzCCZBV7QuGjYdnB/IZfR
+zmy/bv2WH1eaWL0O+RU9oYGVe7lt+wNr/1BntKzhhyjD39cXIq2z+xrBfKXgID9Q
+dZQdc+UAXdkQ/UiN8pMCdXzOPOIkMUjcwnxBJE0WoYOi/j79YkECTbtO
+-----END CERTIFICATE-----
+issuing_ca      	-----BEGIN CERTIFICATE-----
+MIID5DCCAsygAwIBAgIUaLoU/b1J7uGlnkW59k424mSDtDYwDQYJKoZIhvcNAQEL
+BQAwHzEdMBsGA1UEAxMURXhhbXBsZSBMdGQuIFJvb3QgQ0EwHhcNMTcxMDI2MTYy
+MjAwWhcNMTgxMDI2MTYyMjMwWjAnMSUwIwYDVQQDExxFeGFtcGxlIEx0ZC4gSW50
+ZXJtZWRpYXRlIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0hUt
+uq3kb89Tok2abOXP0h1yuocwDv94nZyd6tKUZyJyV6pBNa2/ng0IVzM78Grm2MDw
+c8riz9288i4T2tFEef7MU4/Qg1xdDrnLLmq/eUPOY/nA2eGZKrtqL6YmpMzfxyGZ
+Ny8M2AKJzQ8ZDjJm14u17qx9tM365pCvvLODXBRszPKm+wXCIVmDXnoxLblorVrG
+1/Y2dA5iLrh2sxDw5RRu2pyUERMrBgHtaZEuTecEShDC/+avsKJAYpBTxi4d58lw
+aA327hKZpQyy6R6jguk/JQWWDt8ha4iFf3peukk7ZMt1sG+xwV9OgRlnfSZbCBKL
+PAGaslXfFdCpkkeOUQIDAQABo4IBDjCCAQowDgYDVR0PAQH/BAQDAgEGMA8GA1Ud
+EwEB/wQFMAMBAf8wHQYDVR0OBBYEFKpxKAi7zcO8b89zP4Mq/znm8f3bMB8GA1Ud
+IwQYMBaAFDpoacE/F/1uQL26yaLh/hG6uR10MEMGCCsGAQUFBwEBBDcwNTAzBggr
+BgEFBQcwAoYnaHR0cHM6Ly92YXVsdC5leGFtcGxlLmNvbS92MS9yb290LWNhL2Nh
+MCcGA1UdEQQgMB6CHEV4YW1wbGUgTHRkLiBJbnRlcm1lZGlhdGUgQ0EwOQYDVR0f
+BDIwMDAuoCygKoYoaHR0cHM6Ly92YXVsdC5leGFtcGxlLmNvbS92MS9yb290LWNh
+L2NybDANBgkqhkiG9w0BAQsFAAOCAQEALlCin+t75+DMVQLsbVZlgjLCc30MZ1SP
+fyRDRUvop8IHNQbkS1ufH8A9atoVFbVBpptXzbrCBNaJ2gpL0i+ChXkESFkhkC7V
+NoSovrqVwdLPsXTS3gKNe+sGqvotl5lCdwIxVOwY8UmkWxfJWCFw9Ps9MxF+UAHX
+G0DApjgVG+no83WEuuTr4fquam/eaQ0BP04fcxQV4yRa+MtX4c2o6ocoNdiRaKcS
+ECDoJFyaZgCPgh9S5V3rQaOwm7x3y9tiO/VrpJCOtFZx3vAoYAFTA+fBM3Os/xLt
+RI84PLc7rqKDEPB4Ho0CfO41TPUnUhSefD6F/TlygdprdCy2hW114g==
+-----END CERTIFICATE-----
+private_key     	-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAmVrjkZ3MBRTXX3QU5tXLf51uTZmyQEayWd4IULRqA7zXmzPA
+to1fhI4cvLTGU2blFZoLuwyA8RlpbrtkhD/1s68mEn+eHo8DDWrMXPTRabBLAg28
+lwqEsgys71n5fPaHHMote5VodTsZE+O2/28Nm6jIX8/ca7/L31/jlBkW418twfIo
+x7JVcN4GPNfZhFwG/s0axk3CLLTe8lmpIFnVz+imSdKSCX6ibJ9GIxmHrdn5RCVH
+WOoCDVVKIkcVAk8hRY1dgTBg86yFNygiO/MHT9rJY9i54PXSqFMaNZaRD+psZ+0I
+9hhTA07Z3OhqXH1iAN3rbDV350xXetVsGiHGuQIDAQABAoIBAQCJP7z4MD/ONG7l
+MSEbzzBH0IBN10afHCa3I25RvIY9Ph/A+bp6J2DbY8z4Xto4/pf8k1f4WiJ0pYek
+4PX/Hrcpz5HFcI31T40tzu2ELF/XtT4MYnrsuy8zowCLXv1ZB9K4w4GdX4STlwbE
+tEKtrZiCPbbHeWMO1CMEke8+No4zgzLJjRppxTynP/G5SQtE4Wcb/L07k3NRkTFV
+AVVtIyy01sbSKMHBy15xnIdEdqUe+j4Psii4+yUJcPPfpqCcLrCYN7D/upQ8aM+Z
+xuFaAxbvPrb77S5fT2mTBF/zvru+aoeFCW9tfLQPAJunpPzRuwAsiH/Xkll2155d
+QsdDYcKZAoGBAMtm3bCS9AVv9phlilCZSFIqaHins5JEBcdxteyRiDvCrlnLDEWa
+tKW6aEs16uB2xj/6aYqLrdN8SoWhhRToDUQUWWfgPbOJODuWpUsMiat4JS+X5yeq
+AHfLO3jjVdf3hZc7xLqEWVnfo7acK25yBoyOSmWZ3YvlanuPTXgxBBVPAoGBAMEC
+8S+7lZAd+DGLGkrRwm3huSKKoaET+DiD6zn58vcc9/nlVddYnuqYqQgRenw1TsxV
+1vh8mIBbMSKeO+bl4G0ASJTH/s1nZPw/yjkCTB7k6M4U3cWphVRtqjJ8lhQ2xSjD
+yZfRTbJogzCx1s/E9urInds+sFx39zAXapFx7HF3AoGBALYh+kjujcuAolN8OQpK
+91N73eiMYmOKvZIF5F1dQ5wfi3ekNeztxuzPqiwOr68nLAaF+JOy14gUN7bJFx3N
+XHOltRkq1pU5Pj09e+1j4LLF9qZTYw1FUP3z4eExz+B/KARv5I0PjeLIOxR9avaO
+7AZYM44e5R8r4tmZTElfusRJAoGAX4DBLsk23DS4Fmup+tOHzS8fmEPYbgefjvdX
+cTyISFYBLZmYvBGRsKsRGHjtjoAiGWFwGUwteXWl/mclZL7iKY02XMgJAEHk6hv2
+R/cnCzJhL3eLtL6Ixpns2UZkTGQ9ckpOedyLAXhNUc7tZ6kiNFJIKa//PAHwQc+U
+X5trT0kCgYAvBd5apCmuh9x2prWlkvt7NKIKAEbBLREjOEFFjIedL65rRloZQtqL
+aO9gWbJ20JvMAInTVDR3yIptYLXqfzh7ykk5nNLl0REbd9I9rO2/nO6j0IWS00Xe
+tGKuoxT+AjYmG8NYi2kL88pzvxV5R0ANyRkNchJFdrD9DbxouMc5Nw==
+-----END RSA PRIVATE KEY-----
+private_key_type	rsa
+serial_number   	2b:e3:2f:5f:87:18:94:50:81:a1:96:6a:8e:b5:19:26:39:e1:8b:c0
+----
+
+[IMPORTANT]
+====
+The private key must be kept safe and distributed carefully.
+====
+
+[TIP]
+====
+One may inspect the resulting certificate by pasting the value of `certificate`
+into a file and using `openssl`:
+
+[source,bash]
+----
+$ cat > vault-tests.vault.svc.cluster.local.crt <<EOF
+> -----BEGIN CERTIFICATE-----
+> MIIDhjCCAm6gAwIBAgIUK+MvX4cYlFCBoZZqjrUZJjnhi8AwDQYJKoZIhvcNAQEL
+> BQAwJzElMCMGA1UEAxMcRXhhbXBsZSBMdGQuIEludGVybWVkaWF0ZSBDQTAeFw0x
+> NzEwMjcwODIzMThaFw0xODAxMjUwODIzNDhaMC4xLDAqBgNVBAMTI3ZhdWx0LXRl
+> c3RzLnZhdWx0LnN2Yy5jbHVzdGVyLmxvY2FsMIIBIjANBgkqhkiG9w0BAQEFAAOC
+> AQ8AMIIBCgKCAQEAmVrjkZ3MBRTXX3QU5tXLf51uTZmyQEayWd4IULRqA7zXmzPA
+> to1fhI4cvLTGU2blFZoLuwyA8RlpbrtkhD/1s68mEn+eHo8DDWrMXPTRabBLAg28
+> lwqEsgys71n5fPaHHMote5VodTsZE+O2/28Nm6jIX8/ca7/L31/jlBkW418twfIo
+> x7JVcN4GPNfZhFwG/s0axk3CLLTe8lmpIFnVz+imSdKSCX6ibJ9GIxmHrdn5RCVH
+> WOoCDVVKIkcVAk8hRY1dgTBg86yFNygiO/MHT9rJY9i54PXSqFMaNZaRD+psZ+0I
+> 9hhTA07Z3OhqXH1iAN3rbDV350xXetVsGiHGuQIDAQABo4GiMIGfMA4GA1UdDwEB
+> /wQEAwIDqDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwHQYDVR0OBBYE
+> FHEu3vGSptnbT6O/9w+tOShxaBWzMB8GA1UdIwQYMBaAFKpxKAi7zcO8b89zP4Mq
+> /znm8f3bMC4GA1UdEQQnMCWCI3ZhdWx0LXRlc3RzLnZhdWx0LnN2Yy5jbHVzdGVy
+> LmxvY2FsMA0GCSqGSIb3DQEBCwUAA4IBAQAqJmA9hOXrpK6QU8spnckcr/B13YQp
+> cV+HemxWuRmrXvV0bSlq47xiJMk8EmEI843mZuZDrveqbdEYl/8X26xCBfZCcJCd
+> n7ATs8fsoeY87QduPOlozf3VKITH5f7CcpKboKEt6i33Gwhky+bFMYhlt977nb5l
+> i7ukFM6HwBHWYneB5jb4CRhojKMcDAAgBZgVP7kf/hdKzCCZBV7QuGjYdnB/IZfR
+> zmy/bv2WH1eaWL0O+RU9oYGVe7lt+wNr/1BntKzhhyjD39cXIq2z+xrBfKXgID9Q
+> dZQdc+UAXdkQ/UiN8pMCdXzOPOIkMUjcwnxBJE0WoYOi/j79YkECTbtO
+> -----END CERTIFICATE-----
+> EOF
+$ openssl x509 -in vault-tests.vault.svc.cluster.local.crt -noout -text
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            2b:e3:2f:5f:87:18:94:50:81:a1:96:6a:8e:b5:19:26:39:e1:8b:c0
+    Signature Algorithm: sha256WithRSAEncryption
+        Issuer: CN=Example Ltd. Intermediate CA <1>
+        Validity
+            Not Before: Oct 27 08:23:18 2017 GMT <2>
+            Not After : Jan 25 08:23:48 2018 GMT <2>
+        Subject: CN=vault-tests.vault.svc.cluster.local <3>
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                Public-Key: (2048 bit)
+                Modulus:
+                    00:99:5a:e3:91:9d:cc:05:14:d7:5f:74:14:e6:d5:
+                    cb:7f:9d:6e:4d:99:b2:40:46:b2:59:de:08:50:b4:
+                    6a:03:bc:d7:9b:33:c0:b6:8d:5f:84:8e:1c:bc:b4:
+                    c6:53:66:e5:15:9a:0b:bb:0c:80:f1:19:69:6e:bb:
+                    64:84:3f:f5:b3:af:26:12:7f:9e:1e:8f:03:0d:6a:
+                    cc:5c:f4:d1:69:b0:4b:02:0d:bc:97:0a:84:b2:0c:
+                    ac:ef:59:f9:7c:f6:87:1c:ca:2d:7b:95:68:75:3b:
+                    19:13:e3:b6:ff:6f:0d:9b:a8:c8:5f:cf:dc:6b:bf:
+                    cb:df:5f:e3:94:19:16:e3:5f:2d:c1:f2:28:c7:b2:
+                    55:70:de:06:3c:d7:d9:84:5c:06:fe:cd:1a:c6:4d:
+                    c2:2c:b4:de:f2:59:a9:20:59:d5:cf:e8:a6:49:d2:
+                    92:09:7e:a2:6c:9f:46:23:19:87:ad:d9:f9:44:25:
+                    47:58:ea:02:0d:55:4a:22:47:15:02:4f:21:45:8d:
+                    5d:81:30:60:f3:ac:85:37:28:22:3b:f3:07:4f:da:
+                    c9:63:d8:b9:e0:f5:d2:a8:53:1a:35:96:91:0f:ea:
+                    6c:67:ed:08:f6:18:53:03:4e:d9:dc:e8:6a:5c:7d:
+                    62:00:dd:eb:6c:35:77:e7:4c:57:7a:d5:6c:1a:21:
+                    c6:b9
+                Exponent: 65537 (0x10001)
+        X509v3 extensions:
+            X509v3 Key Usage: critical
+                Digital Signature, Key Encipherment, Key Agreement
+            X509v3 Extended Key Usage:
+                TLS Web Server Authentication, TLS Web Client Authentication
+            X509v3 Subject Key Identifier:
+                71:2E:DE:F1:92:A6:D9:DB:4F:A3:BF:F7:0F:AD:39:28:71:68:15:B3
+            X509v3 Authority Key Identifier:
+                keyid:AA:71:28:08:BB:CD:C3:BC:6F:CF:73:3F:83:2A:FF:39:E6:F1:FD:DB
+
+            X509v3 Subject Alternative Name:
+                DNS:vault-tests.vault.svc.cluster.local
+    Signature Algorithm: sha256WithRSAEncryption
+         2a:26:60:3d:84:e5:eb:a4:ae:90:53:cb:29:9d:c9:1c:af:f0:
+         75:dd:84:29:71:5f:87:7a:6c:56:b9:19:ab:5e:f5:74:6d:29:
+         6a:e3:bc:62:24:c9:3c:12:61:08:f3:8d:e6:66:e6:43:ae:f7:
+         aa:6d:d1:18:97:ff:17:db:ac:42:05:f6:42:70:90:9d:9f:b0:
+         13:b3:c7:ec:a1:e6:3c:ed:07:6e:3c:e9:68:cd:fd:d5:28:84:
+         c7:e5:fe:c2:72:92:9b:a0:a1:2d:ea:2d:f7:1b:08:64:cb:e6:
+         c5:31:88:65:b7:de:fb:9d:be:65:8b:bb:a4:14:ce:87:c0:11:
+         d6:62:77:81:e6:36:f8:09:18:68:8c:a3:1c:0c:00:20:05:98:
+         15:3f:b9:1f:fe:17:4a:cc:20:99:05:5e:d0:b8:68:d8:76:70:
+         7f:21:97:d1:ce:6c:bf:6e:fd:96:1f:57:9a:58:bd:0e:f9:15:
+         3d:a1:81:95:7b:b9:6d:fb:03:6b:ff:50:67:b4:ac:e1:87:28:
+         c3:df:d7:17:22:ad:b3:fb:1a:c1:7c:a5:e0:20:3f:50:75:94:
+         1d:73:e5:00:5d:d9:10:fd:48:8d:f2:93:02:75:7c:ce:3c:e2:
+         24:31:48:dc:c2:7c:41:24:4d:16:a1:83:a2:fe:3e:fd:62:41:
+         02:4d:bb:4e
+$ openssl verify -CAfile intermediate-chain.crt vault-tests.vault.svc.cluster.local
+vault-tests.vault.svc.cluster.local: OK <4>
+----
+<1> The value of the `Issuer` field corresponds to the name of the intermediate
+    certificate authority.
+<2> The certificate expires within the specified 3 months.
+<3> The certificate is valid for `vault-tests.vault.svc.cluster.local`, as
+    requested.
+<4> The certificate is trusted given the `intermediate-chain.crt` chain of
+    trust.
+====
+
+== Further Reading
+
+* https://www.vaultproject.io/docs/secrets/pki/index.html[PKI Secret Backend]
+* https://www.vaultproject.io/api/secret/pki/index.html[PKI Secret Backend HTTP API]

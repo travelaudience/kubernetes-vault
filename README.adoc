@@ -1,4 +1,4 @@
-= [Draft] kubernetes-vault
+= kubernetes-vault
 Vault 0.8.3 on top of Kubernetes (backed by etcd 3.1.10).
 :icons: font
 :toc:
@@ -634,11 +634,11 @@ One should now repeat this command, using one of the other four unseal keys:
 ----
 $ vault unseal
 Key (will be hidden): // <1>
-Sealed: false // <2>
+Sealed: true // <2>
 Key Shares: 5
-Key Threshold: 3
-Unseal Progress: 0
-Unseal Nonce:
+Key Threshold: 3 // <2>
+Unseal Progress: 2 // <2>
+Unseal Nonce: 0dfa6cf3-abb9-c5cd-4725-21f89cc2feea
 ----
 <1> At this point one should input one of the unseal keys not yet used.
 <2> The Vault instance is still _unsealed_.
@@ -842,10 +842,10 @@ dig @8.8.8.8 vault.example.com A // <1>
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
 
 ;; QUESTION SECTION:
-;vault.example.space.		IN	A
+;vault.example.com.		IN	A
 
 ;; ANSWER SECTION:
-vault.example.space.	299	IN	A	35.201.114.242 // <2>
+vault.example.com.	299	IN	A	35.201.114.242 // <2>
 
 ;; Query time: 61 msec
 ;; SERVER: 8.8.8.8#53(8.8.8.8)

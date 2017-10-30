@@ -1,0 +1,408 @@
+= Application Authentication
+:icons: font
+:imagesdir: ./img/
+:toc:
+
+ifdef::env-github[]
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
+== Abstract
+
+This document describes the setup of two authentication processes for
+applications running in Google Container Engine (GKE). The first process is
+based on the Google Cloud IAM API and works on every version of GKE. It is
+suitable for usage in applications running in old versions of GKE. The second
+process is based on the `TokenReview` API of Kubernetes and works on GKE
+clusters running Kubernetes 1.7.8 and higher. It is the recommended approach for
+new clusters and for clusters that can be upgraded.
+
+[#img-architecture]
+.Applications in different clusters and projects communicating with Vault.
+image::architecture.png[Architecture,75%]
+
+The proposed configuration allows for applications running in separate clusters
+and projects to access Vault, providing an effective inter-cluster,
+inter-project solution.
+
+For the remainder of the document it is assumed that
+Vault 0.8.3 is running in GKE and that it is publicly accessible at
+`https://vault.example.com` as described in `README.adoc`.
+
+== Pre-Requisites
+
+* The `vault` binary.
+* The https://stedolan.github.io/jq/[`jq`] binary.
+* Being authenticated as `root` in Vault.
+* A set of policies pre-configured in Vault.
+
+One is also expected to be familiar with Vault and with the Vault documentation,
+in particular with
+
+* the
+https://www.vaultproject.io/intro/getting-started/install.html[Getting Started]
+guide;
+* the
+https://www.vaultproject.io/docs/concepts/lease.html[Lease, Renew, and Revoke]
+docs;
+* the
+https://www.vaultproject.io/docs/concepts/auth.html[Authentication]
+docs;
+* the
+https://www.vaultproject.io/docs/concepts/policies.html[Policies]
+docs.
+
+To a lesser extent, one is also expected to have read the docs for the
+https://www.vaultproject.io/docs/auth/gcp.html[Google Cloud] and
+https://www.vaultproject.io/docs/auth/kubernetes.html[Kubernetes] backends.
+
+== Overview of the Authentication Process
+
+Vault 0.8.3 supports authentication using either Google Cloud IAM
+https://cloud.google.com/compute/docs/access/service-accounts[*_service accounts_*]
+or Kubernetes
+https://kubernetes.io/docs/admin/service-accounts-admin/[*_service accounts_*].
+This is achieved using the https://www.vaultproject.io/docs/auth/gcp.html[`gcp`]
+and https://www.vaultproject.io/docs/auth/kubernetes.html[`kubernetes`]
+authentication backends, respectively. These backends allows Vault
+administrators to define *_roles_*, and applications to request Vault
+*_authentication tokens_* associated with these roles.
+
+[INFO]
+====
+A *_role_* is a set of
+https://www.vaultproject.io/docs/concepts/policies.html[*_policies_*] which
+control what secrets an application can access.
+====
+
+The flow of the `gcp` and `kubernetes` authentication backends consists of four
+steps:
+
+. The application obtains a *_signed token_* representing its identity. This
+  token can either be
+  .. a token requested from the Google Cloud IAM API; or
+  .. the service account token mounted by Kubernetes on the pod in which the
+     application runs.
+. The application sends the signed token to Vault in a *_login request_* for a
+  given role.
+. Vault verifies the authenticity of the signed token using respectively
+  .. the Google Cloud IAM API; or
+  .. the source Kubernetes cluster's API.
+. If verification is successful Vault returns an *_authentication token_* to the
+  application. This token can be used by the application to request secrets from
+  the Vault API, subject to the policies associated with the role.
+
+[#img-authentication]
+.An overview of the flow of the `gcp` and `kubernetes` authentication backends.
+image::authentication.png[Authentication,75%]
+
+
+[TIP]
+====
+In each scenario *_authentication_* is delegated to an external entity. However,
+*_authorization_* is always managed within Vault via the abovementioned roles.
+It is important to understand that IAM roles or Kubernetes `Roles` or
+`ClusterRoles` associated with the service accounts *do not* have any meaning
+within Vault.
+====
+
+== Configuring Google Cloud IAM Authentication
+
+[IMPORTANT]
+====
+In order to use Google Cloud IAM as an authentication method one must enable the
+_Google Identity and Access Management (IAM)_ API in the project where Vault is
+deployed. One can enable the API via the Google Cloud Platform Console by
+navigating to
+
+_APIs & services_ → _Dashboard_ → _Enable APIs & Services_
+
+and searching for _Google Identity and Access Management (IAM)_, or by running
+
+`gcloud --project <project-id> service-management enable iam.googleapis.com`
+
+on a terminal, replacing `<project-id>` with the ID of the project where Vault
+is deployed.
+====
+
+=== Creating a Service Account for Authentication
+
+One must start by creating a Google Cloud IAM service account which Vault will
+use to verify the authenticity of signed tokens. This account must be created on
+the project where Vault is deployed. In order to create the account one must run
+
+[source,bash]
+----
+$ gcloud iam service-accounts create \
+>    vault-authn \ // <1>
+>    --display-name "Vault AuthN" \ // <2>
+>    --project <project-id> // <3>
+Created service account [vault-authn].
+$ gcloud iam service-accounts keys create \
+>    vault-authn.json \ // <4>
+>    --iam-account vault-authn@<project-id>.iam.gserviceaccount.com \ //<3><5>
+>    --key-file-type json
+created key [xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] of type [json] as [vault-authn.json] for [vault-authn@<project-id>.iam.gserviceaccount.com]
+----
+<1> One may choose a different name for the service account.
+<2> One may choose a different display name for the service account.
+<3> One must replace `<project-id>` with the ID of the project where Vault
+    is deployed.
+<4> One may choose a different filename or path for the service account's
+    private key.
+<5> If one has choosen a different name for the service account one must change
+    it here.
+
+[IMPORTANT]
+====
+This service account must be granted the following IAM roles *_on each project hosting client applications_*:
+
+* _Service Accounts_ → _Service Account Key Admin_
+* _Service Accounts_ → _Service Account Token Creator_
+
+One can grant these roles via the Google Cloud Platform Console by navigating to
+
+_IAM & admin_ → _IAM_ → _Add_
+
+or by running
+
+[source,bash]
+----
+$ gcloud projects add-iam-policy-binding <client-project-id> \ // <1>
+>    --member \
+>    serviceAccount:vault-authn@<project-id>.iam.gserviceaccount.com \ // <2><3>
+>    --role \
+>    roles/iam.serviceAccountKeyAdmin
+bindings: (...)
+$ gcloud projects add-iam-policy-binding <client-project-id> \ // <1>
+>    --member \
+>    serviceAccount:vault-authn@<project-id>.iam.gserviceaccount.com \ // <2><3>
+>    --role \
+>    roles/iam.serviceAccountTokenCreator
+bindings: (...)
+----
+<1> One must replace `<client-project-id>` with the ID of the project where the
+    client application is deployed.
+<2> One must replace `<project-id>` with the ID of the project where Vault
+    is deployed.
+<3> If one has choosen a different name for the service account one must change
+    it here.
+====
+
+=== Enabling Vault's `gcp` Authentication Backend
+
+To enable the `gcp` auth backend one must run
+
+[source,bash]
+----
+$ vault auth-enable gcp
+Successfully enabled 'gcp' at 'gcp'!
+----
+
+Then, one must configure the `gcp` auth backend by providing it with the
+private key of the service account used to validate signed tokens:
+
+[source,bash]
+----
+$ vault write auth/gcp/config credentials=@vault-authn.json // <1>
+Success! Data written to: auth/gcp/config
+----
+<1> If one has chosen a different filename or path for the service account's
+    private key one must update this command accordingly.
+
+=== Creating Roles
+
+In order to create roles one must run:
+
+[source,bash]
+----
+$ vault write auth/gcp/role/<role-name> \ // <1>
+>    type="iam" \
+>    project_id="<client-project-id>" \ // <2>
+>    bound_service_accounts="..." \ // <3>
+>    policies="..." \ // <4>
+>    period="<ttl>" // <5>
+Success! Data written to: auth/gcp/role/<role-name>
+----
+<1> One must replace `<role-name>` by the actual role name.
+<2> One must replace `<client-project-id>` by the ID of the project that hosts
+    the client applications.
+<3> One must replace `...` by a comma-separated list of service account IDs that
+    can login with this role.
+<4> One must replace `...` by a comma-separated list of policies to associate
+    with the role.
+<5> One must replace `<ttl>` by the desired time-to-live for the authentication tokens.
+
+[IMPORTANT]
+====
+The fact that `project_id` accepts a single value as input means that at least
+one role must be created for every GCP project hosting a client application.
+====
+
+[IMPORTANT]
+====
+Every service account specified in `bound_service_accounts` must belong to the
+project specified in `<client-project-id>`.
+====
+
+[IMPORTANT]
+====
+The fact that one is specifying a `period` instead of a `ttl` means that
+authentication tokens have to be renewed every `<ttl>` seconds to be kept valid.
+====
+
+[TIP]
+====
+The `bound_service_accounts` and `policies` properties enable fine-grained
+control over what secrets applications can access. One is encouraged to create
+as many roles as necessary to keep access to secrets under tight control and to
+avoid granting too much privileges to a given account.
+====
+
+[TIP]
+====
+For details on how to update, delete and list roles please check the
+https://www.vaultproject.io/api/auth/gcp/index.html[GCP Auth Plugin HTTP API].
+====
+
+== Configuring Kubernetes Authentication
+
+=== Enabling Vault's `kubernetes` Authentication Backend
+
+To enable the `kubernetes` authentication backend one must run:
+
+[source,bash]
+----
+$ vault auth-enable --path "<client-project-id>-<cluster-name>" kubernetes // <1><2>
+Successfully enabled 'gcp' at '<client-project-id>-<cluster-name>'!
+----
+<1> One must replace `<client-project-id>` with the ID of the project where the
+    client application is deployed.
+<2> One must replace `<cluster-name>` with the name of the cluster where the
+    client application is deployed.
+
+[IMPORTANT]
+====
+Every Kubernetes cluster that requires access to Vault needs its own instance of
+the `kubernetes` authentication backend.
+====
+
+[TIP]
+====
+One may choose a naming rule for paths other than
+`<client-project-id>-<cluster-name>`, although this naming scheme is believed to
+be the most intuitive.
+====
+
+Finally, one must configure the `kubernetes` auth backend by providing it with
+the URL of the Kubernetes API and with the CA certificate for the cluster:
+
+[source,bash]
+----
+$ KUBERNETES_HOST=$(gcloud container clusters describe \
+>    <cluster-name> \ // <1>
+>    --format json \
+>    --project <client-project-id> | jq -r .endpoint) // <2>
+$ KUBERNETES_CA_CERT=$(gcloud container clusters describe \
+>    <cluster-name> \ // <1>
+>    --format json \
+>    --project <client-project-id>| jq -r .masterAuth.clusterCaCertificate) // <2>
+$ vault write auth/<client-project-id>-<cluster-name>/config \
+>    kubernetes_host="https://${MASTER_IP}" \
+>    kubernetes_ca_cert="${KUBERNETES_CA_CERT}"
+Success! Data written to: auth/<client-project-id>-<cluster-name>/config
+----
+<1> One must replace `<cluster-name>` with the name of the cluster where the
+    client application is deployed.
+<2> One must replace `<client-project-id>` with the ID of the project where the
+    client application is deployed.
+
+=== Creating Roles
+
+In order to create roles one must run:
+
+[source,bash]
+----
+$ vault write auth/<client-project-id>-<cluster-name>/role/<role-name> \ // <1><2><3>
+>    bound_service_account_names="..." \ // <4>
+>    bound_service_account_namespaces="..." \ // <5>
+>    policies="..." \ // <6>
+>    period="<ttl>" // <7>
+Success! Data written to: auth/<client-project-id>-<cluster-name>/role/<role-name>
+----
+<1> One must replace `<client-project-id>` with the ID of the project where the
+    client application is deployed.
+<2> One must replace `<cluster-name>` with the name of the cluster where the
+    client application is deployed.
+<3> One must replace `<role-name>` by the actual role name.
+<4> One must replace `...` with a comma-separated list of service accounts that
+    can login with this role.
+<5> One must replace `...` by a comma-separated list of namespaces where the
+    abovementioned service accounts can login with this role.
+<6> One must replace `...` by a comma-separated list of policies to associate
+    with the role.
+<7> One must replace `<ttl>` by the desired time-to-live for the authentication
+    tokens.
+
+[IMPORTANT]
+====
+The fact that one is specifying a `period` instead of a `ttl` means that
+authentication tokens have to be renewed every `<ttl>` seconds to be kept valid.
+====
+
+[TIP]
+====
+The `bound_service_account_names`, `bound_service_account_namespaces` and
+`policies` properties enable fine-grained control over what secrets applications
+can access. One is encouraged to create as many roles as necessary to keep
+access to secrets under tight control and to avoid granting too much privileges
+to a given account.
+====
+
+[TIP]
+====
+For details on how to update, delete and list roles please check the
+https://www.vaultproject.io/api/auth/kubernetes/index.html[Kubernetes Auth Plugin HTTP API].
+====
+
+=== RBAC configuration
+
+If the GKE cluster in which a client application is deployed has
+https://kubernetes.io/docs/admin/authorization/rbac/[RBAC] enabled it is
+necessary to perform an extra step—authorize every service account in use to
+access the `TokenReview` API. This can be made by creating a
+`ClusterRoleBinding` which includes all combinations of service account and
+namespace that will authenticate with Vault:
+
+[source,yaml]
+----
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-tokenreview-binding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects: // <1>
+- kind: ServiceAccount
+  name: <service-account-name> // <2>
+  namespace: <namespace> // <3>
+----
+<1> The binding can have as many subjects as necessary.
+<2> One must replace `<service-account-name>` with the name of a service
+    account.
+<3> One must replace `<namespace>` with the name of a namespace in which the
+    abovementioned service account will be used to access Vault.
+
+== Further Reading
+
+* https://www.vaultproject.io/docs/auth/gcp.html[Auth Plugin Backend: gcp]
+* https://www.vaultproject.io/api/auth/gcp/index.html[GCP Auth Plugin HTTP API]
+* https://www.vaultproject.io/docs/auth/kubernetes.html[Auth Backend: Kubernetes]
+* https://www.vaultproject.io/api/auth/kubernetes/index.html[Kubernetes Auth Plugin HTTP API]
