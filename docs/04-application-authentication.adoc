@@ -302,9 +302,9 @@ $ KUBERNETES_HOST=$(gcloud container clusters describe \
 $ KUBERNETES_CA_CERT=$(gcloud container clusters describe \
 >    <cluster-name> \
 >    --format json \
->    --project <client-project-id>| jq -r .masterAuth.clusterCaCertificate)
+>    --project <client-project-id> | jq -r .masterAuth.clusterCaCertificate | base64 -D)
 $ vault write auth/<client-project-id>-<cluster-name>/config \
->    kubernetes_host="https://${MASTER_IP}" \
+>    kubernetes_host="https://${KUBERNETES_HOST}" \
 >    kubernetes_ca_cert="${KUBERNETES_CA_CERT}"
 Success! Data written to: auth/<client-project-id>-<cluster-name>/config
 ----
@@ -312,6 +312,8 @@ Success! Data written to: auth/<client-project-id>-<cluster-name>/config
     client application is deployed.
 <2> One must replace `<client-project-id>` with the ID of the project where the
     client application is deployed.
+<3> Depending on the Unix flavor one is running, `base64 -D` may have to be
+    replaced with `base64 -d`.
 
 === Creating Roles
 
