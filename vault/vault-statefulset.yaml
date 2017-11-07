@@ -1,4 +1,4 @@
-apiVersion: apps/v1beta1
+apiVersion: apps/v1beta2
 kind: StatefulSet
 metadata:
   labels:
@@ -7,6 +7,9 @@ metadata:
   namespace: vault
 spec:
   podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: vault
   serviceName: "vault"
   replicas: 2
   template:

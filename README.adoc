@@ -16,7 +16,7 @@ endif::[]
 * A GCP project in which one has the following Google Cloud IAM roles:
 ** _Container_ > _Container Engine Admin_
 ** _Compute Engine_ > _Compute Network Admin_
-* A working GKE cluster running Kubernetes *_v1.7.8_* with legacy authorization
+* A working GKE cluster running Kubernetes *_v1.8.1_* with legacy authorization
   *_disabled_*.
 * A working installation of `gcloud` configured to access the target Google
   Cloud Platform project.
@@ -332,7 +332,6 @@ etcd-vault-backup-sidecar-899031248-85xck   1/1       Running   0          47s
 ----
 
 If one's output is similar to this it is safe to proceed.
-====
 
 == Deploying Vault
 
@@ -606,7 +605,6 @@ NAME      READY     STATUS    RESTARTS   AGE
 vault-0   2/2       Running   0          7m
 vault-1   1/2       Running   0          7m
 ----
-====
 
 Now, one must also _unseal_ the second Vault instance. One should get back to
 the *_first terminal window_* — where `kubectl port-forward` is running — and
