@@ -48,7 +48,7 @@ $ vault write \ # <3>
 >    ttl="87600h" > root-ca.crt # <7><8>
 
 $ vault write \ # <9>
->    pki/config/urls \
+>    root-ca/config/urls \
 >    issuing_certificates="https://vault.example.com/v1/root-ca/ca" \ <10>
 >    crl_distribution_points="https://vault.example.com/v1/root-ca/crl" <11>
 Success! Data written to: root-ca/config/urls
