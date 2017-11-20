@@ -1,5 +1,5 @@
 {
-	"CN": "etcd-client",
+	"CN": "etcd-operator",
 	"key": {
 		"algo": "rsa",
 		"size": 2048

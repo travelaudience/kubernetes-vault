@@ -17,5 +17,5 @@ spec:
       member:
         peerSecret: etcd-peer-tls
         serverSecret: etcd-server-tls
-      operatorSecret: etcd-client-tls
+      operatorSecret: etcd-operator-tls
   version: "3.1.10"

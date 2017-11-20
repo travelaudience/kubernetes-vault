@@ -20,7 +20,8 @@ necessary to generate root tokens.
 == Pre-Requisites
 
 * The `vault` binary.
-* The Vault unseal keys generated during the setup process.
+* The `vault-init.kms` file containing the encrypted Vault unseal keys generated
+  during the setup process.
 
 == Introduction
 
@@ -63,27 +64,48 @@ of unseal keys to generate an _encoded root token_:
 
 [source,bash]
 ----
-$ vault generate-root -otp="<otp>"
-Root generation operation nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
-Key (will be hidden): <2>
+$ vault generate-root -otp="<otp>" "$(
+    gcloud kms decrypt \
+        --plaintext-file - \
+        --ciphertext-file vault-init.kms \
+        --keyring vault \
+        --key init \
+        --location global \
+        | awk "NR==1" \
+        | awk -F ": " '{print $2}'
+)"
 Nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
 Started: true
 Generate Root Progress: 1
 Required Keys: 3
 Complete: false
 
-$ vault generate-root -otp="<otp>"
-Root generation operation nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
-Key (will be hidden): <2>
+$ vault generate-root -otp="<otp>" -nonce="<nonce>" "$(
+    gcloud kms decrypt \
+        --plaintext-file - \
+        --ciphertext-file vault-init.kms \
+        --keyring vault \
+        --key init \
+        --location global \
+        | awk "NR==2" \
+        | awk -F ": " '{print $2}'
+)"
 Nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
 Started: true
 Generate Root Progress: 2
 Required Keys: 3
 Complete: false
 
-$ vault generate-root -otp="<otp>"
-Root generation operation nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
-Key (will be hidden): <2>
+$ vault generate-root -otp="<otp>" -nonce="<nonce>" "$(
+    gcloud kms decrypt \
+        --plaintext-file - \
+        --ciphertext-file vault-init.kms \
+        --keyring vault \
+        --key init \
+        --location global \
+        | awk "NR==3" \
+        | awk -F ": " '{print $2}'
+)"
 Nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
 Started: true
 Generate Root Progress: 3
@@ -92,10 +114,6 @@ Complete: true
 
 Encoded root token: <encoded-root-token>
 ----
-<1> One must replace `<otp>` with the value of the one-time password generated
-    in the previous step.
-<2> One must enter one of the unseal keys at this point.
-<3> `<encoded-root-token>` contains the resulting encoded root token.
 
 As a final step one needs to decode the value obtained in the previous step:
 

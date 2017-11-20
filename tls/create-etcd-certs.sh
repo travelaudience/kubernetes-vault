@@ -5,65 +5,65 @@ TLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # DST_DIR is the directory where generated certificates and keys will live.
 DST_DIR="${TLS_DIR}/certs"
 
-# cleanup removes leftover '*.csr' files which we don't need.
-function cleanup {
-  rm -rf ./*.csr
+# decrypts data from stdin into stdout
+function decrypt {
+    gcloud kms decrypt --plaintext-file - --ciphertext-file - --location global --keyring vault --key etcd
 }
 
-# gen_ca generates the CA certificate with which all other certs are signed.
-function gen_ca {
-  cfssl gencert \
-    -initca "../ca-csr.json" | cfssljson -bare "ca"
+# encrypts data from stdin into stdout
+function encrypt {
+      gcloud kms encrypt --plaintext-file - --ciphertext-file - --location global --keyring vault --key etcd
 }
 
-# gen_cert takes a name as a parameter and generates a certificate based on the
-# "${1}.json" spec.
-function gen_cert {
-  cfssl gencert \
-    -ca="ca.pem" \
-    -ca-key="ca-key.pem" \
-    -config="../ca-config.json" \
-    -profile=kubernetes-vault \
-    "../${1}-csr.json" | cfssljson -bare "${1}"
-}
+# generate generates the certificates
+function generate {
+  # generate the CA and store the output in 'VAULT_CA_RES'.
+  local VAULT_CA_RES="$(cfssl gencert -initca "../ca-csr.json")"
+  # store the certificate in 'VAULT_CA_CRT'.
+  local VAULT_CA_CRT="$(echo ${VAULT_CA_RES} | jq -r .cert)"
+  # store the private key in 'VAULT_CA_KEY'.
+  local VAULT_CA_KEY="$(echo ${VAULT_CA_RES} | jq -r .key)"
 
-# rename_certs renames the generates certificates and keys so that it's easier
-# to use them with 'etcd-operator' and 'kubectl' later on.
-function rename_certs {
-  # Keys have the '.key' extension.
-  for file in *-key.pem;
+  # dump encrypted certificate to 'ca-crt.pem.kms'.
+  echo "${VAULT_CA_CRT}" | encrypt > ca-crt.pem.kms
+  # dump encrypted private key to 'ca-key.pem.kms'.
+  echo "${VAULT_CA_KEY}" | encrypt > ca-key.pem.kms
+  # dump decrypted certificate to 'ca-crt.pem'.
+  cat ca-crt.pem.kms | decrypt > ca-crt.pem
+  # dump encrypted private key to 'ca-crt.pem'.
+  cat ca-key.pem.kms | decrypt > ca-key.pem
+
+  for component in etcd-operator etcd-peer etcd-server vault-etcd;
   do
-    mv "${file}" "${file/-key.pem/.key}"
+    # generate the component certificate and private key and store the output in 'COMPONENT_RES'.
+    local COMPONENT_RES="$(cfssl gencert \
+        -ca="./ca-crt.pem" \
+        -ca-key="./ca-key.pem" \
+        -config="../ca-config.json" \
+        -profile=kubernetes-vault \
+        "../${component}-csr.json")"
+    # store the certificate in 'COMPONENT_CRT'.
+    local COMPONENT_CRT="$(echo ${COMPONENT_RES} | jq -r .cert)"
+    # store the private key in 'COMPONENT_KEY'.
+    local COMPONENT_KEY="$(echo ${COMPONENT_RES} | jq -r .key)"
+
+    # dump encrypted certificate to '${component}-crt.pem.kms'.
+    echo "${COMPONENT_CRT}" | encrypt > "${component}-crt.pem.kms"
+    # dump encrypted private key to '${component}-crt.pem.kms'.
+    echo "${COMPONENT_KEY}" | encrypt > "${component}-key.pem.kms"
   done
 
-  # Certificates have the '.crt' extension.
-  for file in *.pem;
-  do
-    mv "${file}" "${file/.pem/.crt}"
-  done
-
-  # We will need one CA per certificate, so we make four copies of it.
-  echo "etcd-client-ca.crt" "peer-ca.crt" "server-ca.crt" "vault-etcd-ca.crt" \
-    | xargs -n 1 cp ca.crt
+  # remove 'ca-crt.pem'.
+  rm -f ca-crt.pem
+  # remove 'ca-key.pem'.
+  rm -f ca-key.pem
 }
 
 # Create 'DST_DIR'.
 mkdir -p "${DST_DIR}"
 # Move to "${DST_DIR}".
-pushd "${DST_DIR}" > /dev/null && \
-# Generate the CA.
-gen_ca && \
-# Generate the 'etcd-client' certificate.
-gen_cert etcd-client && \
-# Generate the 'server' certificate.
-gen_cert server && \
-# Generate the 'peer' certificate.
-gen_cert peer && \
-# Generate the 'vault-etcd' certificate.
-gen_cert vault-etcd && \
-# Rename generated certificates and keys.
-rename_certs && \
-# Cleanup leftovers.
-cleanup && \
+pushd "${DST_DIR}" > /dev/null
+# Generate the certificates.
+generate
 # Move back to the previous directory.
 popd "${DST_DIR}" > /dev/null
