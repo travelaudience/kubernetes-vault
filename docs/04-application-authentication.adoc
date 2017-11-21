@@ -33,7 +33,7 @@ and projects to access Vault, providing an effective inter-cluster,
 inter-project solution.
 
 For the remainder of the document it is assumed that
-Vault 0.8.3 is running on GKE and that it is publicly accessible at
+Vault 0.9.0 is running on GKE and that it is publicly accessible at
 `https://vault.example.com`.
 
 == Pre-Requisites
@@ -65,7 +65,7 @@ https://www.vaultproject.io/docs/auth/kubernetes.html[Kubernetes] backends.
 
 == Overview of the Authentication Process
 
-Vault 0.8.3 supports authentication using either Google Cloud IAM
+Vault 0.9.0 supports authentication using either Google Cloud IAM
 https://cloud.google.com/compute/docs/access/service-accounts[*_service accounts_*]
 or Kubernetes
 https://kubernetes.io/docs/admin/service-accounts-admin/[*_service accounts_*].

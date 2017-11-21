@@ -7,6 +7,9 @@ metadata:
   namespace: vault
 data:
   config.hcl: |
+      api_addr     = "https://vault.example.com"
+      cluster_addr = "http://vault:8201"
+
       listener "tcp" {
         address         = "0.0.0.0:8200"
         cluster_address = "0.0.0.0:8201"
@@ -15,11 +18,9 @@ data:
 
       storage "etcd" {
         address         = "https://etcd-vault-client.etcd.svc.cluster.local:2379"
-        cluster_addr    = "http://vault:8201"
         etcd_api        = "v3"
         ha_enabled      = "true"
         path            = "vault/"
-        redirect_addr   = "https://vault.example.com"
         sync            = "false"
         tls_ca_file     = "/vault/tls/vault-etcd-ca.crt"
         tls_cert_file   = "/vault/tls/vault-etcd.crt"
