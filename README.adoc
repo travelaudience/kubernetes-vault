@@ -20,8 +20,8 @@ endif::[]
 ** _Cloud KMS_ > _Cloud KMS CryptoKey Encrypter/Decrypter_
 ** _Container_ > _Container Engine Admin_
 ** _Compute Engine_ > _Compute Network Admin_
-* A working GKE cluster running Kubernetes *_v1.8.1_* with legacy authorization
-  *_disabled_*.
+* A working GKE cluster running Kubernetes *_v1.8.3_* with legacy authorization
+  *_disabled_* and *_Read/Write_* permissions for *_Storage_*.
 * A working installation of `gcloud` configured to access the target Google
   Cloud Platform project.
 * A working installation of `kubectl` configured to access the target cluster.
