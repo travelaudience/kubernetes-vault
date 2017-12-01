@@ -666,20 +666,7 @@ Forwarding from [::1]:28200 -> 8200
 Now one should get back to the *_second terminal window_* — where
 `vault init` and `vault unseal` were run before — and repeat the instructions followed to unseal the first Vault pod.
 
-The second Vault pod is now unsealed and ready to serve requests.
-
-[IMPORTANT]
-====
-The second Vault pod will operate as a
-*_standby_* instance. This means it will accept requests and forward them to the
-cluster leader (which, in this case, is `vault-0`). To learn more about
-clustering and high-availability in Vault one should head over to
-https://www.vaultproject.io/docs/concepts/ha.html[Vault's HA documentation].
-
-However, and for network optimization, Kubernetes will mark _standby_ instances as not ready so that any requests are directed only to the _active_ instance.
-====
-
-If one inspects the logs of the `vault-1` pod one will see something similar to:
+If one inspects the logs of the `vault-1` pod one will see that it is now unsealed:
 
 [source,bash]
 ----
@@ -688,6 +675,32 @@ $ kubectl logs --container vault --namespace vault vault-1
 2017/09/20 15:17:23.263728 [INFO ] core: vault is unsealed
 2017/09/20 15:17:23.263728 [INFO ] core: entering standby mode
 ----
+
+However, inspecting pods in the `vault` namespace will still show the pod as not
+ready:
+
+[source,bash]
+----
+$ kubectl get --namespace vault pod
+NAME      READY     STATUS    RESTARTS   AGE
+vault-0   2/2       Running   0          9m
+vault-1   1/2       Running   0          9m
+----
+
+This is because the second Vault pod will operate as a *_standby_* instance,
+meaning that it is ready to serve requests in case the first pod fails. However,
+for network optimization, Kubernetes will mark such a _standby_ instance as not
+ready so that any requests are directed only to the _active_ instance. When
+the `vault-0` pod fails for any reason, `vault-1` will take control and
+Kubernetes will direct all incoming requests to it. In this scenario, `vault-0`
+will take the role of _standby_ once it recovers from failure.
+
+[IMPORTANT]
+====
+To learn more about clustering and high-availability in Vault one
+should head over to
+https://www.vaultproject.io/docs/concepts/ha.html[Vault's HA documentation].
+====
 
 === Revoke root token
 

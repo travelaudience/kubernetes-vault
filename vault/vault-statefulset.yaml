@@ -28,13 +28,13 @@ spec:
           name: vault
         livenessProbe:
           httpGet:
-            path: /v1/sys/health?&sealedcode=200&uninitcode=200&standbyok=200
+            path: /v1/sys/health?&sealedcode=200&uninitcode=200&standbycode=200
             port: avaultpi
           initialDelaySeconds: 10
           periodSeconds: 5
         readinessProbe:
           httpGet:
-            path: /v1/sys/health?standbyok=200
+            path: /v1/sys/health
             port: vault
           initialDelaySeconds: 10
           periodSeconds: 5
