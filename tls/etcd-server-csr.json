@@ -1,10 +1,10 @@
 {
-	"CN": "*.etcd-vault.etcd.svc",
+	"CN": "*.etcd.vault.svc",
 	"hosts": [
-		"*.etcd-vault.etcd.svc",
-		"etcd-vault-client.etcd.svc",
-		"*.etcd-vault.etcd.svc.cluster.local",
-		"etcd-vault-client.etcd.svc.cluster.local",
+		"*.etcd.vault.svc",
+		"*.etcd.vault.svc.cluster.local",
+		"etcd-client.vault.svc",
+		"etcd-client.vault.svc.cluster.local",
 		"localhost"
 	],
 	"key": {

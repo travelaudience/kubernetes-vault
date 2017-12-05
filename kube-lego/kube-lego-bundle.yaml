@@ -3,7 +3,7 @@ kind: Namespace
 metadata:
   name: kube-lego
 ---
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
@@ -48,7 +48,7 @@ metadata:
   name: kube-lego
   namespace: kube-lego
 ---
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   labels:
@@ -74,7 +74,7 @@ metadata:
   name: kube-lego
   namespace: kube-lego
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1beta2
 kind: Deployment
 metadata:
   labels:
@@ -83,6 +83,9 @@ metadata:
   namespace: kube-lego
 spec:
   replicas: 1
+  selector:
+    matchLabels:
+      app: kube-lego
   template:
     metadata:
       labels:

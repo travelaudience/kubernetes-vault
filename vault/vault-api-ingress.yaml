@@ -22,4 +22,4 @@ spec:
   tls:
     - hosts:
         - vault.example.com
-      secretName: vault-tls
+      secretName: vault-api-tls

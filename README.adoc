@@ -128,17 +128,10 @@ https://www.vaultproject.io/downloads.html[binary] for one's architecture and
 dropping it on `${PATH}`. The binary can act both as server and client, and
 will be needed later on to configure the Vault deployment.
 
-== Creating the `etcd` and `vault` namespaces
+== Creating the `vault` namespace
 
-To better group and manage the major components of the solution it is
-recommended to create two namespaces in the cluster — one for etcd-related
-resources and another one for Vault-related ones:
-
-[source,bash]
-----
-$ kubectl create namespace etcd
-namespace "etcd" created
-----
+To better group and manage the components of the solution it is recommended to
+create a dedicated namespace in the cluster:
 
 [source,bash]
 ----
@@ -148,8 +141,8 @@ namespace "vault" created
 
 [IMPORTANT]
 ====
-If one does not follow this approach, or if one chooses different names for the
-namespaces, one must update the scripts and Kubernetes descriptors in this
+If one does not follow this approach, or if one chooses a different name for the
+namespace, one must update the scripts and Kubernetes descriptors in this
 repository accordingly.
 ====
 
@@ -158,69 +151,91 @@ repository accordingly.
 === Deploying `etcd-operator`
 
 `etcd-operator` will be responsible for managing the etcd cluster that Vault
-will use as storage backend. It will handle tasks such as
-<<#bookmark-etcd-vault-periodic-backups,periodic backups>> and disaster recovery.. `etcd-operator` and the cluster itself will live in the
-`etcd` namespace.
+will use as storage backend. `etcd-backup-operator` and `etcd-restore-operator`
+will, in turn, handle tasks such as periodic backups and disaster recovery.
+These three components and the cluster itself will live in the
+`vault` namespace.
 
-To start with, and since RBAC is active on the cluster, one needs to setup
-adequate permissions. To do this one needs to
+Since RBAC is active on the cluster, one also needs to setup adequate
+permissions. To do this one needs to
 
 * create a `ClusterRole` specifying a list of permissions;
 * create a dedicated `ServiceAccount` for `etcd-operator`;
 * create a `CluserRoleBinding` that grants these permissions to the service
  account.
 
-Below are the commands needed to perform the tasks described above:
+Below is the command needed to perform the tasks described above and deploy the
+three components of `etcd-operator`:
 
 [source,bash]
 ----
-$ kubectl create -f ./etcd-operator/etcd-operator-clusterrole.yaml
+$ kubectl create -f ./etcd-operator/etcd-operator-bundle.yaml
 clusterrole "etcd-operator" created
-----
-
-[source,bash]
-----
-$ kubectl create -f ./etcd-operator/etcd-operator-serviceaccount.yaml
 serviceaccount "etcd-operator" created
-----
-
-[source,bash]
-----
-$ kubectl create -f ./etcd-operator/etcd-operator-clusterrolebinding.yaml
 clusterrolebinding "etcd-operator" created
-----
-
-One is now ready to deploy `etcd-operator` itself:
-
-[source,bash]
-----
-$ kubectl create -f ./etcd-operator/etcd-operator-deployment.yaml
 deployment "etcd-operator" created
+deployment "etcd-backup-operator" created
+deployment "etcd-restore-operator" created
+service "etcd-restore-operator" created
 ----
 
-At this point it is a good idea to check whether the deployment succeeded. One
+At this point it is a good idea to check whether the deployments succeeded. One
 should wait for a few seconds and then run:
 
 [source,bash]
 ----
-$ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace etcd \
+$ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace vault \
   | grep etcd-operator \
+  | awk 'NR==1' \
+  | awk '{print $1}')
+$ ETCD_BACKUP_OPERATOR_POD_NAME=$(kubectl get pod --namespace vault \
+  | grep etcd-backup-operator \
+  | awk 'NR==1' \
+  | awk '{print $1}')
+$ ETCD_RESTORE_OPERATOR_POD_NAME=$(kubectl get pod --namespace vault \
+  | grep etcd-restore-operator \
   | awk 'NR==1' \
   | awk '{print $1}')
 ----
 
 [source,bash]
 ----
-$ kubectl logs --follow --namespace etcd "${ETCD_OPERATOR_POD_NAME}"
-time="2017-09-26T10:48:43Z" level=info msg="etcd-operator Version: 0.6.0"
-time="2017-09-26T10:48:43Z" level=info msg="Git SHA: a04c308"
-time="2017-09-26T10:48:43Z" level=info msg="Go Version: go1.9"
-time="2017-09-26T10:48:43Z" level=info msg="Go OS/Arch: linux/amd64"
-time="2017-09-26T10:48:43Z" level=info msg="Event(v1.ObjectReference{Kind:"Endpoints", Namespace:"etcd", Name:"etcd-operator", UID:"43a0bc38-a2a8-11e7-9f73-42010a9a0fc9", APIVersion:"v1", ResourceVersion:"2111", FieldPath:""}): type: 'Normal' reason: 'LeaderElection' etcd-operator-3796541610-99ptj became leader"
+$ kubectl logs --follow --namespace vault "${ETCD_OPERATOR_POD_NAME}"
+time="2017-11-25T10:03:26Z" level=info msg="etcd-operator Version: 0.7.0"
+time="2017-11-25T10:03:26Z" level=info msg="Git SHA: 3bcbdb1"
+time="2017-11-25T10:03:26Z" level=info msg="Go Version: go1.9.1"
+time="2017-11-25T10:03:26Z" level=info msg="Go OS/Arch: linux/amd64"
+time="2017-11-25T10:03:26Z" level=info msg="Event(v1.ObjectReference{Kind:"Endpoints", Namespace:"vault", Name:"etcd-operator", UID:"e1047470-d1c7-11e7-800e-42010a9a0046", APIVersion:"v1", ResourceVersion:"698376", FieldPath:""}): type: 'Normal' reason: 'LeaderElection' etcd-operator-5876bdb586-dhn95 became leader"
 ----
 
-If the output doesn't differ much from the example, and in particular if one
-doesn't see any error messages, it is safe to proceed.
+[source,bash]
+----
+$ kubectl logs --follow --namespace vault "${ETCD_BACKUP_OPERATOR_POD_NAME}"
+time="2017-11-25T10:03:26Z" level=info msg="Go Version: go1.9.2"
+time="2017-11-25T10:03:26Z" level=info msg="Go OS/Arch: linux/amd64"
+time="2017-11-25T10:03:26Z" level=info msg="etcd-backup-operator Version: 0.0.1+git"
+time="2017-11-25T10:03:26Z" level=info msg="Git SHA: b970de9d"
+ERROR: logging before flag.Parse: I1127 18:30:36.257589       1 leaderelection.go:174] attempting to acquire leader lease...
+ERROR: logging before flag.Parse: I1127 18:30:36.295994       1 leaderelection.go:184] successfully acquired lease vault/etcd-backup-operator
+time="2017-11-25T10:03:26Z" level=info msg="Event(v1.ObjectReference{Kind:\"Endpoints\", Namespace:\"vault\", Name:\"etcd-backup-operator\", UID:\"0f990a0b-d3a1-11e7-800e-42010a9a0046\", APIVersion:\"v1\", ResourceVersion:\"1083817\", FieldPath:\"\"}): type: 'Normal' reason: 'LeaderElection' etcd-backup-operator-65ff78d94d-t2jjf became leader"
+time="2017-11-25T10:03:26Z" level=info msg="starting backup controller" pkg=controller
+----
+
+[source,bash]
+----
+$ kubectl logs --follow --namespace vault "${ETCD_RESTORE_OPERATOR_POD_NAME}"
+time="2017-11-25T10:03:26Z" level=info msg="Go Version: go1.9.2"
+time="2017-11-25T10:03:26Z" level=info msg="Go OS/Arch: linux/amd64"
+time="2017-11-25T10:03:26Z" level=info msg="etcd-backup-operator Version: 0.0.1+git"
+time="2017-11-25T10:03:26Z" level=info msg="Git SHA: b970de9d"
+ERROR: logging before flag.Parse: I1127 18:30:36.257589       1 leaderelection.go:174] attempting to acquire leader lease...
+ERROR: logging before flag.Parse: I1127 18:30:36.295994       1 leaderelection.go:184] successfully acquired lease vault/etcd-backup-operator
+time="2017-11-25T10:03:26Z" level=info msg="Event(v1.ObjectReference{Kind:\"Endpoints\", Namespace:\"vault\", Name:\"etcd-restore-operator\", UID:\"8663f9bb-d3a0-11e7-800e-42010a9a0046\", APIVersion:\"v1\", ResourceVersion:\"1083818\", FieldPath:\"\"}): type: 'Normal' reason: 'LeaderElection' etcd-restore-operator-86f7f67cdc-dk455 became leader"
+time="2017-11-25T10:03:26Z" level=info msg="listening on 0.0.0.0:19999"
+time="2017-11-25T10:03:26Z" level=info msg="starting restore controller" pkg=controller
+----
+
+If the output doesn't differ much from the example it is safe to proceed.
 
 === Securing etcd cluster
 
@@ -246,7 +261,7 @@ One will need different types of certificates for establishing TLS:
 
 One will also need a _Certificate Authority_ (CA) to sign these certificates.
 Since one will be securing communications in cluster-internal domains (such as
-`etcd-0000.etcd-vault.etcd.svc.cluster.local`) one cannot rely on an external
+`etcd-0000.etcd.vault.svc.cluster.local`) one cannot rely on an external
 CA to provide these certificates. Therefore, one must bootstrap their own CA
 and use it to sign these certificates.
 
@@ -263,7 +278,7 @@ To generate the certificates run:
 [source,bash]
 ----
 $ ./tls/create-etcd-certs.sh
-2017/09/18 13:05:34 [INFO] generating a new CA key and certificate from CSR
+2017/11/25 10:08:12 [INFO] generating a new CA key and certificate from CSR
 (...)
 ----
 
@@ -328,7 +343,7 @@ secret "etcd-operator-tls" created
 secret "vault-etcd-tls" created
 ----
 
-The `vault-etcd-tls` secret will be needed later on.
+The `vault-tls` secret will be needed later on.
 
 [NOTE]
 ====
@@ -337,38 +352,36 @@ and decide what to do with the files in `tls/certs`, as they won't be needed for
 the remainder of the procedure.
 ====
 
-=== Deploying the `etcd-vault` cluster
+=== Deploying the `etcd` cluster
 
 Now that `etcd-operator` and the necessary Kubernetes secrets are adequately
 setup, it is time to create the etcd cluster. To do that, one must run:
 
 [source,bash]
 ----
-$ kubectl create -f etcd/vault-etcd-etcdcluster.yaml
-etcdcluster "etcd-vault" created
+$ kubectl create -f etcd/etcd-etcdcluster.yaml
+etcdcluster "etcd" created
 ----
 
-By default ./etcd/vault-etcd-etcdcluster.yaml[the cluster specification] is:
+By default ./etcd/etcd-etcdcluster.yaml[the cluster specification] is:
 
-* Cluster name is `etcd-vault`.
-* Use etcd *v3.1.10*, since `etcd-operator` doesn't support v3.2 yet.
+* Cluster name is `etcd`.
+* Use etcd *v3.1.10*.
 * Have *three nodes*.
-* *Hourly* backups of the data.
-* Keep at most *twelve backups*. These are stored in a 2GB
- https://cloud.google.com/compute/docs/disks/[Persistent Disk].
 
-Before proceeding any further, one must check whether the etcd cluster deployment suceeded by inspecting
-pods in the `etcd` namespace:
+Before proceeding any further, one must check whether the etcd cluster deployment succeeded by inspecting
+pods in the `vault` namespace:
 
 [source,bash]
 ----
-$ kubectl get pod --namespace etcd
-NAME                                        READY     STATUS    RESTARTS   AGE
-etcd-operator-3160827283-2v367              1/1       Running   0          2m
-etcd-vault-0000                             1/1       Running   0          47s
-etcd-vault-0001                             1/1       Running   0          39s
-etcd-vault-0002                             1/1       Running   0          21s
-etcd-vault-backup-sidecar-899031248-85xck   1/1       Running   0          47s
+$ kubectl get pod --namespace vault
+NAME                                     READY     STATUS    RESTARTS   AGE
+etcd-0000                                1/1       Running   0          6m
+etcd-0001                                1/1       Running   0          6m
+etcd-0002                                1/1       Running   0          6m
+etcd-operator-5876bdb586-dj6dc           1/1       Running   0          7m
+etcd-backup-operator-5876bdb586-t2jjf    1/1       Running   0          7m
+etcd-restore-operator-5876bdb586-dk455   1/1       Running   0          7m
 ----
 
 If one's output is similar to this it is safe to proceed.
@@ -490,9 +503,15 @@ pods in the `vault` namespace:
 [source,bash]
 ----
 $ kubectl get pod --namespace vault
-NAME      READY     STATUS    RESTARTS   AGE
-vault-0   1/2       Running   0          30s
-vault-1   1/2       Running   0          30s
+NAME                                     READY     STATUS    RESTARTS   AGE
+etcd-0000                                1/1       Running   0          1h
+etcd-0001                                1/1       Running   0          1h
+etcd-0002                                1/1       Running   0          1h
+etcd-operator-5876bdb586-dj6dc           1/1       Running   0          1h
+etcd-backup-operator-5876bdb586-t2jjf    1/1       Running   0          1h
+etcd-restore-operator-5876bdb586-dk455   1/1       Running   0          1h
+vault-0                                  1/2       Running   0          19s
+vault-1                                  1/2       Running   0          19s
 ----
 
 If one’s output is similar to this it is safe to proceed.
@@ -523,9 +542,10 @@ $ kubectl logs --namespace vault --container vault vault-0
 
 ==> Vault server started! Log data will stream in below:
 
-2017/11/21 15:48:13.382731 [INFO ] core: security barrier not initialized
-2017/11/21 15:48:18.383671 [INFO ] core: security barrier not initialized
-2017/11/21 15:48:23.381753 [INFO ] core: security barrier not initialized
+2017/11/25 13:22:16.424742 [INFO ] core: security barrier not initialized
+2017/11/25 13:22:21.423651 [INFO ] core: security barrier not initialized
+2017/11/25 13:22:26.424083 [INFO ] core: security barrier not initialized
+(...)
 ----
 
 These `INFO` level messages indicate that Vault hasn't been initialized
@@ -646,9 +666,15 @@ Inspecting pods in the `vault` namespace should now output something similar to:
 [source,bash]
 ----
 $ kubectl get --namespace vault pod
-NAME      READY     STATUS    RESTARTS   AGE
-vault-0   2/2       Running   0          7m
-vault-1   1/2       Running   0          7m
+NAME                                     READY     STATUS    RESTARTS   AGE
+etcd-0000                                1/1       Running   0          1h
+etcd-0001                                1/1       Running   0          1h
+etcd-0002                                1/1       Running   0          1h
+etcd-operator-5876bdb586-dj6dc           1/1       Running   0          1h
+etcd-backup-operator-5876bdb586-t2jjf    1/1       Running   0          1h
+etcd-restore-operator-5876bdb586-dk455   1/1       Running   0          1h
+vault-0                                  2/2       Running   0          3m
+vault-1                                  2/2       Running   0          3m
 ----
 
 Now, one must also _unseal_ the second Vault instance. One should get back to
@@ -672,8 +698,8 @@ If one inspects the logs of the `vault-1` pod one will see that it is now unseal
 ----
 $ kubectl logs --container vault --namespace vault vault-1
 (...)
-2017/09/20 15:17:23.263728 [INFO ] core: vault is unsealed
-2017/09/20 15:17:23.263728 [INFO ] core: entering standby mode
+2017/11/25 13:25:13.459271 [INFO ] core: vault is unsealed
+2017/11/25 13:25:13.459401 [INFO ] core: entering standby mode
 ----
 
 However, inspecting pods in the `vault` namespace will still show the pod as not
@@ -768,7 +794,7 @@ Created [https://www.googleapis.com/compute/v1/projects/<project-name>/global/ad
 ----
 $ gcloud compute addresses describe vault --global
 address: <1>
-creationTimestamp: '2017-09-18T05:12:33.928-07:00'
+creationTimestamp: '2017-11-25T06:25:39.628-07:00'
 description: ''
 id: '7579662126224115422'
 ipVersion: IPV4
@@ -889,10 +915,10 @@ $ KUBE_LEGO_POD_NAME=$(kubectl get --namespace kube-lego pod \
 [source,bash]
 ----
 $ kubectl logs --namespace kube-lego "${KUBE_LEGO_POD_NAME}"
-time="2017-09-18T12:16:06Z" level=info msg="kube-lego 0.1.5-a9592932 starting" context=kubelego
-time="2017-09-18T12:16:06Z" level=info msg="connecting to kubernetes api: https://10.15.240.1:443" context=kubelego
-time="2017-09-18T12:16:06Z" level=info msg="successfully connected to kubernetes api v1.7.5" context=kubelego
-time="2017-09-18T12:16:06Z" level=info msg="server listening on http://:8080/" context=acme
+time="2017-11-25T13:29:38Z" level=info msg="kube-lego 0.1.5-a9592932 starting" context=kubelego
+time="2017-11-25T13:29:38Z" level=info msg="connecting to kubernetes api: https://10.15.240.1:443" context=kubelego
+time="2017-11-25T13:29:38Z" level=info msg="successfully connected to kubernetes api v1.8.3-gke.0" context=kubelego
+time="2017-11-25T13:29:38Z" level=info msg="server listening on http://:8080/" context=acme
 (...)
 ----
 

@@ -1,0 +1,392 @@
+= etcd Backups and Disaster Recovery
+:icons: font
+:imagesdir: ./img/
+:toc:
+
+ifdef::env-github[]
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
+== Abstract
+
+This document describes how to configure periodic backups of etcd to a Google
+Cloud Storage bucket, and how to recover from total cluster loss.
+
+== Pre-Requisites
+
+* A working installation of etcd on top of GKE as described in
+  <<../README.adoc,`README.adoc`>>.
+  ** The GKE cluster should be created with *_Read/Write_* permissions for
+     *_Storage_*.
+* A https://cloud.google.com/storage/docs/key-terms#buckets[Google Cloud Storage bucket]
+  where to store backups.
+  ** The bucket must be created and configured by an account with
+     *_Storage Admin_* permissions on the project.
+  ** No aditional permissions are required for the operation of
+     `etcd-{backup,restore}-operator`.
+
+== Introduction
+
+The deployment described in <<../README.adoc,`README.adoc`>> uses `etcd-operator` to
+manage the etcd cluster where Vault stores its data. When an etcd cluster member
+fails — for instance, when one of the `etcd-XXXX` pod dies — `etcd-operator`
+takes care of creating a new member to replace the failed one. This process
+works for as long as the majority of the cluster members are available and
+healthy. That being, one can easy conclude that the described deployment
+tolerates the failure of at most one etcd member.
+
+When two or more cluster members are lost there is no way for `etcd-operator` to
+recover the cluster — it must be recreated from a pre-existing snapshot. This is
+the purpose of `etcd-backup-operator` and `etcd-restore-operator`. Using the
+former, and with the help of a Kubernetes `CronJob`, one can easily schedule
+periodic backups to a Google Cloud Storage bucket. Using the latter, one can
+recover from total cluster loss by using one of these backups.
+
+== Scheduling Periodic Backups
+
+`etcd-backup-operator` provides an `EtcdBackup`
+https://kubernetes.io/docs/concepts/api-extension/custom-resources/[custom resource]
+which represents a single, _point-in-time_ backup of an etcd cluster to Google
+Cloud Storage. A backup procedure is triggered by the creation of such an
+`EtcdBackup` resource — `etcd-backup-operator` will be notified of this event
+and immediately start a backup procedure. The created `EtcdBackup` resource will
+eventually be updated with the backup procedure status and, in case of success,
+with the path to the snapshot file in GCS.
+
+Even though this mechanism provides an easy way to trigger a single, manual
+backup, one should not rely on a manual process to backup etcd. Kubernetes
+provides a `CronJob` resource which can be used to periodically trigger the
+creation of an `EtcdBackup`. For instance, to configure hourly backups of the
+etcd cluster described in <<../README.adoc,`README.adoc`>> one may use the
+following `CronJob`:
+
+[source,yaml]
+----
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: etcdbackup
+  namespace: vault
+spec:
+  schedule: "@hourly"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: etcd-backup-trigger
+            image: quay.io/travelaudience/etcd-operator:0.7.0-gcs
+            imagePullPolicy: Always
+            command:
+            - etcd-backup-trigger
+            env:
+            - name: ETCD_CLUSTER_NAME
+              value: etcd
+            - name: ETCD_CLUSTER_NAMESPACE
+              value: vault
+            - name: ETCD_OPERATOR_TLS_SECRET
+              value: etcd-operator-tls
+            - name: GCS_BUCKET_NAME
+              value: <gcs-bucket-name>
+          restartPolicy: Never
+          serviceAccountName: etcd-operator
+      backoffLimit: 0
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 12
+  successfulJobsHistoryLimit: 12
+----
+
+To create this `CronJob` one may run:
+
+[source,bash]
+----
+$ cat <<EOF | kubectl create -f -
+apiVersion: batch/v1beta1
+kind: CronJob
+(...)
+  failedJobsHistoryLimit: 12
+  successfulJobsHistoryLimit: 12
+EOF
+----
+
+IMPORTANT: One must replace `<gcs-bucket-name>` in the `CronJob` definition
+above with the name of the GCS bucket where the backup should be stored.
+
+Once created, this `CronJob` will behave the following way:
+
+. Every hour a pod running `etcd-backup-trigger` will be started.
+  `etcd-backup-trigger` is a simple utility that creates an `EtcdBackup`
+  resource and exits. As mentioned above, this starts the backup process.
+. This pod will be configured via the `ETCD_CLUSTER_NAME`,
+  `ETCD_CLUSTER_NAMESPACE`, `ETCD_OPERATOR_TLS_SECRET` and `GCS_BUCKET_NAME`
+  environment variables.
+. If a given run fails, the pod should not be restarted. Also, no more trials
+  shall be made in the current hour.
+. Concurrent runs of this job are forbidden.
+. Keep up to twelve successful and failed jobs in history. These numbers may be
+  changed as one sees fit.
+
+=== Inspecting Backup Jobs
+
+To list all backup jobs in history one may run
+
+[source,bash]
+----
+$ kubectl --namespace vault get pod --show-all | awk 'NR == 1 || /etcd-backup-trigger/'
+NAME                                     READY     STATUS      RESTARTS   AGE
+etcd-backup-trigger-1511888400-b4h2k     0/1       Completed   0          2h
+etcd-backup-trigger-1511892000-4jt7h     0/1       Completed   0          1h
+etcd-backup-trigger-1511894600-3kj79     0/1       Completed   0          7m
+----
+
+If one inspects the logs for a single job with `Completed` status one will see
+something similar to
+
+[source,bash]
+----
+$ kubectl --namespace vault logs etcd-backup-trigger-1511888400-b4h2k
+time="2017-11-28T17:00:09Z" level=info msg="created etcdbackup resource: etcd-9cmgm"
+time="2017-11-28T17:00:09Z" level=warning msg="this does not mean the actual backup was successful"
+time="2017-11-28T17:00:09Z" level=warning msg="check 'kubectl --namespace vault describe etcdbackup etcd-9cmgm' for details"
+----
+
+This provides three important pieces of information:
+
+* An `EtcdBackup` resource named `etcd-9cmgm` has been created.
+* The creation of this resource *_does not_* mean that a backup has been
+  successfully created — it only means that a backup has been *_triggered_*.
+* To check the status of the actual backup process one should run the specified
+  command.
+
+If one runs the specified command one will obtain much more information:
+
+[source,bash]
+----
+$ kubectl --namespace vault describe etcdbackup etcd-9cmgm
+Name:         etcd-9cmgm
+Namespace:    vault
+Labels:       <none>
+Annotations:  <none>
+API Version:  etcd.database.coreos.com/v1beta2
+Kind:         EtcdBackup
+Metadata:
+  Cluster Name:
+  Creation Timestamp:  2017-11-28T17:00:09Z
+  Generate Name:       etcd-
+  Generation:          0
+  Resource Version:    1481610
+  Self Link:           /apis/etcd.database.coreos.com/v1beta2/namespaces/vault/etcdbackups/etcd-9cmgm
+  UID:                 51ce728f-d4db-11e7-800e-42010a9a0046
+Spec:
+  Cluster Name:  etcd
+  Gcs:
+    Bucket Name:    example-bucket
+  Operator Secret:  etcd-operator-tls
+  Storage Type:     GCS
+Status:
+  Path:       gs://example-bucket/vault/etcd/3.1.10_000000000000003b_etcd.backup
+  Succeeded:  true
+Events:       <none>
+----
+
+The `.Status` field provides two important pieces of information:
+
+* The backup process was successful.
+* The snapshot was saved to `gs://example-bucket/vault/etcd/3.1.10_000000000000003b_etcd.backup`.
+
+Since the backup process was successful one now has at least one snapshot with
+which to recover from total cluster loss stored at the specified location.
+
+[NOTE]
+====
+Snapshot files are named in the format
+
+`<namespace>/<cluster-name>/<etcd-version>-<etcd-revision>-_etcd.backup`
+
+where `<etcd-revision>` is an hexadecimal string corresponding to the etcd
+revision that was in place at the time the snapshot was taken. In this
+particular example the snapshot file corresponds to revision `59` of an etcd
+`3.1.10` cluster named `etcd` running in the `vault` namespace.
+====
+
+== Disaster Recovery
+
+As mentioned above, when two or more cluster members fail one needs to conduct a
+disaster recovery process in order to recreate the etcd cluster from the latest
+available backup. This may happen due to a number of reasons — including
+accidentally deleting the Kubernetes cluster or when switching between clusters.
+
+The disaster recover process is made easy by `etcd-recover-backup`, but first
+one should go through the following checklist to ensure a successful recovery:
+
+* The `vault` namespace exists:
+
+[source,bash]
+----
+$ kubectl get namespaces
+NAME          STATUS    AGE
+default       Active    7d
+kube-lego     Active    4d
+kube-public   Active    7d
+kube-system   Active    7d
+vault         Active    4d
+----
+
+* The `etcd-operator` TLS secrets exist:
+
+[source,bash]
+----
+$ kubectl --namespace vault get secret | awk 'NR==1 || /etcd-.*-tls/'
+NAME                        TYPE                                  DATA      AGE
+etcd-operator-tls           Opaque                                3         4d
+etcd-peer-tls               Opaque                                3         4d
+etcd-server-tls             Opaque                                3         4d
+----
+
+* The `etcd-operator` deployment is healthy:
+
+[source,bash]
+----
+$ kubectl --namespace vault get deployment
+NAME                           DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+deploy/etcd-backup-operator    1         1         1            1           7h
+deploy/etcd-operator           1         1         1            1           7h
+deploy/etcd-restore-operator   1         1         1            1           7h
+----
+
+* No traces of a previous `EtcdCluster` exist:
+
+[source,bash]
+----
+$ kubectl --namespace vault get etcdcluster
+No resources found.
+----
+
+[source,bash]
+----
+$ kubectl --namespace vault get pod | awk 'NR==1 || /etcd/'
+NAME                                     READY     STATUS    RESTARTS   AGE
+etcd-backup-operator-85b578cf9d-pxkmd    1/1       Running   0          7h
+etcd-operator-5d987966b6-ffpvx           1/1       Running   0          7h
+etcd-restore-operator-66666657c7-9tw6n   1/1       Running   0          7h
+----
+
+* No traces of a previous `EtcdRestore` exist:
+
+[source,bash]
+----
+$ kubectl --namespace vault get etcdrestore
+No resources found.
+----
+
+If one's output is similar to the above it is safe to proceed. To initiate the
+recovery process itself one should first grab the full path to the most recent
+backup stored in the GCS bucket — i.e., the one with the highest revision. For
+example, given the output
+
+[source,bash]
+----
+$ gsutil ls -lh gs://<bucket-name>/vault/etcd/
+  7.09 MiB  2017-11-29T10:00:02Z  gs://<bucket-name>/vault/etcd/3.1.10_0000000000000037_etcd.backup
+  7.09 MiB  2017-11-29T15:00:02Z  gs://<bucket-name>/vault/etcd/3.1.10_000000000000003b_etcd.backup
+TOTAL: 2 objects, 14860352 bytes (14.17 MiB)
+----
+
+one should pick
+`gs://<bucket-name>/vault/etcd/3.1.10_000000000000003b_etcd.backup`. Then, one
+must create an `EtcdRestore` resource similar to the following:
+
+[source,yaml]
+----
+apiVersion: "etcd.database.coreos.com/v1beta2"
+kind: "EtcdRestore"
+metadata:
+  name: etcd
+  namespace: vault
+spec:
+  clusterSpec:
+    size: 3
+    version: 3.1.10
+    TLS:
+      static:
+        member:
+          peerSecret: etcd-peer-tls
+          serverSecret: etcd-server-tls
+        operatorSecret: etcd-operator-tls
+  gcs:
+    path: gs://<bucket-name>/vault/etcd/3.1.10_000000000000003b_etcd.backup
+----
+
+For instance, and assuming that the above YAML manifest is stored at
+`etcd-restore.yaml`, one should run
+
+[source,yaml]
+----
+$ kubectl create -f etcd-restore.yaml
+etcdrestore "etcd" created
+----
+
+At this point one should wait for a few minutes to allow for `etcd-operator` to
+react to the changes and recreate the cluster. One may inspect the logs of the
+`etcd-operator` pod to get some insight. When recovery is completed, one should
+see an output similar to the one listed below when running the following
+command:
+
+[source,bash]
+----
+$ kubectl --namespace vault describe etcdrestore
+Name:         etcd
+Namespace:    vault
+Labels:       <none>
+Annotations:  <none>
+API Version:  etcd.database.coreos.com/v1beta2
+Kind:         EtcdRestore
+Metadata:
+  Cluster Name:
+  Creation Timestamp:  2017-11-29T15:46:28Z
+  Generation:          0
+  Resource Version:    1562567
+  Self Link:           /apis/etcd.database.coreos.com/v1beta2/namespaces/vault/etcdrestores/etcd
+  UID:                 76c6a51c-d51c-11e7-800e-42010a9a0046
+Spec:
+  Cluster Spec:
+    TLS:
+      Static:
+        Member:
+          Peer Secret:    etcd-peer-tls
+          Server Secret:  etcd-server-tls
+        Operator Secret:  etcd-operator-tls
+    Base Image:
+    Size:                 3
+    Version:              3.1.10
+  Gcs:
+    Path:  gs://<bucket-name>/vault/etcd/3.1.10_000000000000003b_etcd.backup
+Status:
+  Succeeded:  true
+Events:       <none>
+----
+
+To confirm that the cluster has in fact been created, one may run
+
+[source,bash]
+----
+$ kubectl --namespace vault get etcdcluster
+NAME      AGE
+etcd      4m
+----
+
+[source,bash]
+----
+$ kubectl --namespace vault get pod | awk 'NR==1 || /etcd-[0-9]+/'
+NAME                                     READY     STATUS    RESTARTS   AGE
+etcd-0000                                1/1       Running   0          4m
+etcd-0001                                1/1       Running   0          4m
+etcd-0002                                1/1       Running   0          4m
+----
+
+If one's output is similar to this the recovery process is completed, and the
+etcd cluster is usable once again.

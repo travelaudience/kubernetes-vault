@@ -46,7 +46,7 @@ spec:
         - mountPath: /vault/config
           name: vault-config
         - mountPath: /vault/tls
-          name: vault-etcd-tls
+          name: vault-tls
       - name: nginx
         image: "nginx:1.12.2-alpine"
         imagePullPolicy: Always
@@ -77,5 +77,5 @@ spec:
           name: vault
         name: vault-config
       - secret:
-          secretName: vault-etcd-tls
-        name: vault-etcd-tls
+          secretName: vault-tls
+        name: vault-tls

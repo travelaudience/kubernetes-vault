@@ -33,7 +33,7 @@ function generate {
   # dump encrypted private key to 'ca-crt.pem'.
   cat ca-key.pem.kms | decrypt > ca-key.pem
 
-  for component in etcd-operator etcd-peer etcd-server vault-etcd;
+  for component in etcd-operator etcd-peer etcd-server vault;
   do
     # generate the component certificate and private key and store the output in 'COMPONENT_RES'.
     local COMPONENT_RES="$(cfssl gencert \

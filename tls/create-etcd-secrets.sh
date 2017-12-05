@@ -22,7 +22,7 @@ data:
 kind: Secret
 metadata:
   name: etcd-operator-tls
-  namespace: etcd
+  namespace: vault
 type: Opaque
 EOF
 # Create the 'etcd-peer-tls' secret.
@@ -35,7 +35,7 @@ data:
 kind: Secret
 metadata:
   name: etcd-peer-tls
-  namespace: etcd
+  namespace: vault
 type: Opaque
 EOF
 # Create the 'etcd-server-tls' secret.
@@ -48,19 +48,19 @@ data:
 kind: Secret
 metadata:
   name: etcd-server-tls
-  namespace: etcd
+  namespace: vault
 type: Opaque
 EOF
 # Create the 'vault-etcd-tls' secret.
 cat <<EOF | kubectl create -f -
 apiVersion: v1
 data:
-  vault-etcd-ca.crt: $(cat ca-crt.pem.kms | decrypt_and_encode)
-  vault-etcd.crt: $(cat vault-etcd-crt.pem.kms | decrypt_and_encode)
-  vault-etcd.key: $(cat vault-etcd-key.pem.kms | decrypt_and_encode)
+  vault-ca.crt: $(cat ca-crt.pem.kms | decrypt_and_encode)
+  vault.crt: $(cat vault-crt.pem.kms | decrypt_and_encode)
+  vault.key: $(cat vault-key.pem.kms | decrypt_and_encode)
 kind: Secret
 metadata:
-  name: vault-etcd-tls
+  name: vault-tls
   namespace: vault
 type: Opaque
 EOF
