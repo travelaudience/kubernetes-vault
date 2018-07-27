@@ -186,16 +186,13 @@ should wait for a few seconds and then run:
 ----
 $ ETCD_OPERATOR_POD_NAME=$(kubectl get pod --namespace vault \
   | grep etcd-operator \
-  | awk 'NR==1' \
-  | awk '{print $1}')
+  | awk 'NR==1 {print $1}')
 $ ETCD_BACKUP_OPERATOR_POD_NAME=$(kubectl get pod --namespace vault \
   | grep etcd-backup-operator \
-  | awk 'NR==1' \
-  | awk '{print $1}')
+  | awk 'NR==1 {print $1}')
 $ ETCD_RESTORE_OPERATOR_POD_NAME=$(kubectl get pod --namespace vault \
   | grep etcd-restore-operator \
-  | awk 'NR==1' \
-  | awk '{print $1}')
+  | awk 'NR==1 {print $1}')
 ----
 
 [source,bash]
@@ -650,8 +647,7 @@ $ for i in {1..3}; do \
         --keyring vault \
         --key init \
         --location global \
-        | awk "NR==${i}" \
-        | awk -F ": " '{print $2}'
+        | awk -F ": " "NR==${i} {print \$2}"
       )"
 done
 ----
@@ -744,8 +740,7 @@ $ vault auth "$(
       --keyring vault \
       --key init \
       --location global \
-      | awk "NR==6" \
-      | awk -F ": " '{print $2}'
+      | awk -F ": " 'NR==6 {print $2}'
     )"
 Successfully authenticated! You are now logged in.
 token: <1>
@@ -908,8 +903,7 @@ succeeded by running the following:
 ----
 $ KUBE_LEGO_POD_NAME=$(kubectl get --namespace kube-lego pod \
   | grep kube-lego \
-  | awk 'NR==1' \
-  | awk '{print $1}')
+  | awk 'NR==1 {print $1}')
 ----
 
 [source,bash]
