@@ -71,8 +71,7 @@ $ vault generate-root -otp="<otp>" "$(
         --keyring vault \
         --key init \
         --location global \
-        | awk "NR==1" \
-        | awk -F ": " '{print $2}'
+        | awk -F ": " 'NR==1 {print $2}'
 )"
 Nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
 Started: true
@@ -87,8 +86,7 @@ $ vault generate-root -otp="<otp>" -nonce="<nonce>" "$(
         --keyring vault \
         --key init \
         --location global \
-        | awk "NR==2" \
-        | awk -F ": " '{print $2}'
+        | awk -F ": " 'NR==2 {print $2}'
 )"
 Nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
 Started: true
@@ -103,8 +101,7 @@ $ vault generate-root -otp="<otp>" -nonce="<nonce>" "$(
         --keyring vault \
         --key init \
         --location global \
-        | awk "NR==3" \
-        | awk -F ": " '{print $2}'
+        | awk -F ": " 'NR==3 {print $2}'
 )"
 Nonce: 3bc26078-ae67-7597-1d04-8f312c8908e9
 Started: true
